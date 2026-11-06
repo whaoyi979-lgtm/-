@@ -377,7 +377,7 @@ function setState(phase,msg){
 
 function render(){
   var app = $('#app');
-  if(!S.authed && S.phase==='session-expired'){ S.phase='idle'; }
+  // I-04 修复：会话失效态要保留到登录页，用于显示明确提示，不再被静默重置为 idle
   if(S.route==='#/reset'){ app.innerHTML = resetView(); return; }
   if(!S.authed){ app.innerHTML = signinView(); return; }
   if(S.route==='#/credits'){ app.innerHTML = shell(creditsView()); return; }
@@ -395,6 +395,7 @@ function signinView(){
       '<button class="btn sm" data-action="join">加入</button></div>'+
     '<div class="auth-main"><div class="card auth-card">'+
       '<h1>登录'+esc(DATA.brand.name)+'</h1><p class="muted tiny">请输入演示凭据以继续（本地演示，不连接任何外部服务）</p>'+
+      (S.phase==='session-expired'?'<div class="notice warn">会话已失效，请重新登录演示会话。</div>':'')+
       (S.signinError?'<div class="notice danger">'+esc(S.signinError)+'</div>':'')+
       '<div class="field"><label for="em">邮箱</label><input id="em" type="email" placeholder="demo@north.invalid" value="demo@north.invalid"></div>'+
       '<div class="field"><label for="pw">密码</label><input id="pw" type="password" placeholder="至少 6 位" value="demo123"></div>'+
@@ -583,14 +584,15 @@ function resultsTable(){
   var r = S.result || CORE.buildResults({selectedSourceIds:S.selectedSources,columns:curModule().columns});
   var rows = CORE.filterBySource(r.rows,S.filterSource);
   var pg = CORE.paginate(rows,S.page,r.pageSize);
-  var multi = r.columns==='multi';
+  // V-20/I-02 修复：列集按「当前模块」即时判定，不读缓存的 r.columns，避免切换模块后列头滞后
+  var multi = curModule().columns==='multi';
+  // B-01 修复：表头列数必须与首行单元格数严格一致（两套列集均为 6 列）
   var head = multi
-    ? '<th>书签</th><th>已补充</th><th>命中平台</th><th>来源</th><th>置信度</th><th>操作</th>'
+    ? '<th>书签</th><th>已补充</th><th>命中标识</th><th>命中来源</th><th>置信度</th><th>操作</th>'
     : '<th>书签</th><th>标识</th><th>站点</th><th>状态</th><th>置信度</th><th>操作</th>';
   var body = pg.rows.map(function(x,i){
     var cells = multi
-      ? '<td>'+flag(x.category==='enriched')+'</td><td>'+esc(x.identifier)+'</td><td>'+esc(CORE.sourceName(x.sourceId))+'</td>'+
-        '<td>'+esc(CORE.sourceName(x.sourceId))+'</td>'
+      ? '<td>'+flag(x.category==='enriched')+'</td><td>'+esc(x.identifier)+'</td><td>'+esc(CORE.sourceName(x.sourceId))+'</td>'
       : '<td>'+esc(x.identifier)+'</td><td>'+esc(CORE.sourceName(x.sourceId))+'</td><td><span class="tag '+statusClass(x.status)+'">'+esc(x.status)+'</span></td>';
     return '<tr><td><button class="btn sm" data-action="bookmark" data-id="'+esc(x.identifier)+'">☆</button></td>'+cells+
       '<td>'+x.confidence+'%</td><td><button class="btn sm" data-action="pivot" data-id="'+esc(x.identifier)+'">以此线索再查</button></td></tr>';
