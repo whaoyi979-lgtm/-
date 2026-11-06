@@ -27,6 +27,12 @@
 
 > ⚠️ **最关键的一条口径**：`/m/search` 本体在本次合规范围内**未登录不可见**，因此关于该页 DOM / 路由 / 脚本 / 接口的一手证据为 **0**。下文 §B–§F 中关于「搜索页」的结构与字段，**全部是同品牌公开文档的类比描述**，一律标【公开】或【推断】，绝不标【实测】。此点与 team-lead 交叉验证结论一致（`recon/team-lead-crosscheck.md` 第 93–98 行）。
 
+> **「目标页直接证据」与「同品牌公开文档佐证」的界限**（team-lead 本轮补充要求）：
+> - **目标页直接证据** = 仅指 `usersearch.ai` 域下本次亲自 WebFetch / 朴素 curl 观察到的结果（§A、附录 3 的 **E 系列**）。就 `/m/search` 而言，这部分只有「被导向登录页 / 被 challenge 拦截」，**没有任何搜索 UI 的一手证据**。
+> - **同品牌公开文档佐证** = `usersearch.com` / `usersearch.org` 的公开营销页、帮助文档、第三方评测（附录 3 的 **P 系列**，及 `recon/team-lead-crosscheck.md` 的 X1/X2）。它们描述的是**另一套域名上的产品**，仅作行为类比，**不是** `/m/search` 的实测。
+> - **`/m/` 前缀可能是移动版（mobile）布局**，因此更不能据此断言 `/m/search` 与 `.com` 文档描述的**桌面工作台**完全一致 —— 已作为 **H-13** 写入未知项清单（范围级风险）。
+> - 文档中的**价格、模块名、第三方数据源名、品牌名与 UI 文案，一律只作为证据记录**；实现阶段用占位数据与自有命名替换（附录 2、team-lead 交叉验证笔记第 5 行）。
+
 ---
 
 ## A. 可访问性矩阵
@@ -236,6 +242,20 @@
 | Entity-type tab strip | 横向 tab（Public Leaks） | `All, Email, Phone, IP, CIDR, MAC, Domain, URL, Bitcoin, IBAN, Card Numbe…` | 默认 `All`；可横向滚动，右侧有 `Filter` 齿轮 | 【公开】P01/P03 |
 | `Filter: Found` | 下拉（Results 子头） | — | 收窄可见行；完整选项未文档化 | 【公开】P05 |
 
+#### D.2b 【公开】官网首页 `usersearch.com/` 的输入类型 chips 与模块示例（本轮补充线索，已复核）
+
+来源：WebSearch `usersearch.ai "UserSearch 2.0" what is it features` 结果 #1（P10/P12）逐字原文；**属官网营销落地页控件，不是 `/m/search` 的输入项**。
+
+| 项 | 逐字内容 | 证据 |
+|---|---|---|
+| 输入类型 chips | `Username` / `Email` / `Phone` / `Picture` / `Name` / `Crypto` / `Businesses` / `Domains` / `SecurityInfo` | 【公开】P10/P12 |
+| 入口文案 | `Search for Usernames`、`Advanced search`、示例值 `fred@example.com`、按钮 `Search Now`、`OneScan` / `selected sources` | 【公开】P10/P12 |
+| 模块示例（含成本标签） | `Dynamic / Breach Exposure / HaveIBeenPwned / Free`；`Email threat / HudsonRock / Free`；`Name search / PIPL / $1.00`；`ProtonMail analyse / ProtonMail / Free`；`Email-to-name / Gravatar / Free`；`Scam database / ScamSearch / Free` | 【公开】P10/P12 |
+| 辅助信息 | `500K+ users every month`、`AI-Enhanced Results`、`Source attribution`、`Case bookmarks` / `XLSX report`、`S.A.R.G.E.` AI agent | 【公开】P10/P12 |
+| 第三方评测定价 | 免费计划、Premium `$18.97`/月（含 `$10` credits）、`$159.97`/年；Bulk 最多 5 输入；团队共享 credits | 【公开】P16 |
+
+> `$18.97` / `$159.97` 与 `.ai` Wiki 订阅页【实测 E23】数值**跨来源吻合**（但套餐结构是否一致未验证）。以上均为**营销落地页**文案，与 §D.2 的 v2.0 文档字段**不是同一套 UI，不可合并成一张输入项表**。
+
 ### D.3 【推断·待验证】
 
 - 上述 D.2 的字段**是否就是 `/m/search` 的真实输入项**、字段 `name` / `type` / 前端校验规则 / 必填性 / 空输入与超长输入行为，**全部未验证**（H-1、H-6）。
@@ -280,6 +300,26 @@
 | 导出 / 报告 | `Export` = 当前结果的临时下载；`Report` = 保存到 Case 的生成物，观察到 `.xlsx`；product 页另称 `PDF · DOC · EXCEL` / `PDF · CSV` | 【公开】P02/P05/P08/P09 |
 | 滚动 / 分页 | 两个截帧都有竖直滚动条「indicates more rows exist below the viewport」；**未文档化任何分页控件** | 【公开】P05 |
 
+#### E.3b 【公开】产品页工作台示意文本、官网首页结果表与成本表（本轮补充线索，已复核）
+
+来源：WebSearch 结果 `https://www.usersearch.com/product/usersearch-2.0/?ref=usersearch.com`（P09）与 `https://www.usersearch.com/`（P10/P12）逐字原文。**均为营销页的示意文本 / 示例数据，不是真实查询结果，也不是 `/m/search` 实测。**
+
+| 位置 | 逐字示例值 |
+|---|---|
+| 顶栏 / 上下文 | `Enterprise` · `Live data` · `Case: Mark` · `Forensic Mode` · `Credits $14.88`；VIEW `Normal` / `Advanced` / `AI Agent`；左导航 `Dashboard` / `Bookmarks` / `Reports` / `History` / `Case Management` / `My Team` |
+| Composer | `Email Intelligence` · `fred@example.com` · `Search $3.10`；`Email OneScan 5 modules $3.10` |
+| 模块行（含成本） | `UserSearch / Email Search / Free` · `EPIEOS / Email Search / $1.40` · `HaveIBeenPwned / Breach Exposure / Free` |
+| 结果区计数 / 动作 | `27 Found` · `12 Enriched` · `9 Connections`；`AI Analyse` · `AI Ask` · `Export` |
+| 结果行（值 \| 来源 \| 状态） | `fred@example.com \| UserSearch \| Found` · `fred@example.com \| EPIEOS \| Enriched` · `fred@example.com \| HudsonRock \| Threat` · `fred@example.com \| IntelX \| Exposure` |
+| **官网首页结果表列头** | `Username` / `Source` / `Status`；示例行 `alex_walker_88 \| GitHub \| Found enriched`、`alexw_88 \| Telegram \| Linked`、`alex.walker \| Forum archive \| Archived`、`alex_walker_88 \| X / Twitter \| Found enriched` |
+| 产品页 6 步平台工作流 | `01 Choose a Search type` → `02 Run OneScan` → `03 Run a Bulk search` → `04 Retain the work` → `05 Apply account controls` → `06 Work with a team` |
+
+**成本表（【公开】P15 `reference/credits-and-pricing` 逐字摘录，仅作证据记录）**：
+`Username Intelligence / Username Search (3000+ sites) / free / Free`；`Phone Intelligence / Background Check (US) / fixed / $0.40`；`People Intelligence / Person (Pipl – Social) / fixed / $1.00`；`Corporate Intelligence / Company Search (OpenCorporates) / fixed / $0.50`；`Cyber Intelligence / IP Host Lookup / fixed / $0.20`；`Public Leaks / Public Leaks (IntelX) / fixed / $0.20`；`Vehicle Lookup / Vehicle Lookup (UK Only, Enriched) / fixed / $5.00`；`Court Records / Court Records (OneScan) / dynamic / $0.60 (range $0.12 – $0.60)`。
+OneScan 动态成本拆解：`$1.20 = Predicta $0.50 + OSINT Industries $0.70`（Username Intelligence）；Court Records OneScan `$0.60 (range $0.12–$0.60)`。
+
+> ⚠️ 官网首页列集 `Username/Source/Status` 与 §E.2 的 4 组列集**再次不一致**（另有 Glossary 的 `Found On/Data Source/Status/Enriched`、results-table 的两套 Module 专属列）。这是**营销示意 vs 文档说明 vs 版本差异**的混合，**不能合并成唯一结果表定义**（H-4）。所有价格 / 数据源名 / 品牌名 / 文案**只作证据记录**，实现时用占位资产（附录 2）。
+
 ### E.4 数据契约（rea-recon 模板第 4 节）— **本次为空**
 
 本次**没有捕获到任何真实请求**：无 URL、无 method、无请求载荷、无响应状态码、无响应 JSON 形状、无错误分支、无发起脚本。因此不产出任何数据契约条目。
@@ -308,6 +348,10 @@
 | F-14 | **导出** | `Export` 按钮；`documented export options include XLSX`；Report 观察到 `.xlsx`；product 页称 `PDF · CSV` / `PDF · DOC · EXCEL` | 【公开】中（多页表述不完全一致） | P02/P05/P08/P09 |
 | F-15 | **网络异常 / 5xx / 超时** | 官方文档未给出任何 HTTP 错误分支文案；本次无网络捕获 | **无证据 → 未知** | H-2 / H-6 |
 | F-16 | **空输入 / 超长 / 特殊字符 / 多结果** | 官方文档只给「零结果」与输入纠错建议，未描述空输入提交、长度上限、特殊字符转义、多结果排序 | **无证据 → 未知** | H-6 |
+| F-17 | **结果行状态（官网首页示意）** | 列头 `Username / Source / Status`；状态示例 `Found` / `Found enriched` / `Linked` / `Archived`；产品页示意另有 `Enriched` / `Threat` / `Exposure` | 【公开】弱（营销示意文本，非真实状态枚举） | P09/P10 |
+| F-18 | **搜索深度 / 速度分层（.org 站）** | `usersearch.org/features.php` 述 `Lightning / Instant / Deep / Complete` 分层、`Bookmark / Save / Collections / Reporting`、免登录的 username 查询 | 【公开·由 team-lead 提供，**本人未复核该 URL**】；且 `.org` 自述「仅 username 查询、免费、无需注册」，与 `.ai` premium 版不是同一界面 | P20 + H-13 |
+
+> F-17/F-18 只作**交互范式参考**，不得据此推断 `/m/search` 的状态枚举或分层控件。
 
 ---
 
@@ -345,6 +389,7 @@
 | **H-10** | `.ai` 2023 年 Wiki 的 Basic/Advanced Dashboard 描述是否为**已废弃的旧版 UI**（与 v2.0 文档冲突） | 若误当现行 UI，会复刻出错误布局 | 登录后比对；默认按 v2.0 文档处理 |
 | **H-11** | WebFetch 与朴素 curl 通道结果差异的成因 | 只影响证据表述，不影响功能复刻 | 属环境行为，无需复刻 |
 | **H-12** | `Join Now` 链接的 href、`Email me a login link` 的实现、各 input 的 `name`/`type`/`required`、注册页真实内容（被 challenge 挡住） | 认证页复刻细节 | 登录后 / 授权后观察 |
+| **H-13** | **`/m/` 前缀是否代表移动版（mobile）布局**，以及 `/m/search` 与 `.com` 文档描述的**桌面工作台**是否为同一套 UI | **team-lead 本轮明确提醒**：若 `/m/` 是移动端布局，则 §B–§E 全部按桌面文档做的类比会**整体错位**（列数、左右面板并排方式、控件密度、VIEW 分段控件可能都不存在）。与 H-1/H-8 叠加，属**范围级风险**，不是局部字段差异 | 授权登录后按不同视口比对；或由主理人确认 `/m/` 语义。本次不推断 |
 
 > **无阻塞性假设被偷偷带入**：以上每一项都未被「验证掉」，全部显式保留为未知。按 `replica-blueprint` 步骤 6，H-1/H-2 属于**无法绕开的阻塞性假设**——应交回主理人决策（要么补授权回到侦察阶段，要么明确接受「公开文档驱动的行为复刻 + 全量占位数据」路线，与 team-lead 交叉验证结论第 97 行一致）。
 
@@ -456,6 +501,9 @@
 | P19 | `https://usersearch.com/resources/documentation/guides/forums` — *Public forums search: overview*（`Reddit Username` 字段、`$0.20`） | WebSearch 结果摘录 |
 | X1/X2/X3 | `recon/team-lead-crosscheck.md`（team-lead 交叉验证笔记，非本人实测；X1=getting-started、X2=troubleshooting-faq、X3=目标页可达性） | 读取，未修改 |
 | G1–G4 | `recon/github-crosscheck.md`（team-lead 笔记：GitHub `soxoj/osint-namecheckers-list` 的 `Usersearch — ~120 popular sites...`、`m4lal0/userSearch`、`codassassin/UserSearch`、`cn-sec.com/archives/2841437.html` 的 `地址:https://usersearch.ai/`） | 读取，未修改 |
+| P20 | `https://www.usersearch.org/features.php` — 分层 `Lightning/Instant/Deep/Complete`、`Bookmark/Save/Collections/Reporting`、免登录 username 查询 | **【公开】由 team-lead 2026-11-06 消息提供，本人未复核 URL 可见性**（遵守「不再扩展新 URL 探测」指令）；仅作范式参考，见 F-18 |
+
+> **本轮补充线索的复核状态（逐条自证）**：team-lead 提供的 6 组公开资料中 —— ①`getting-started/searching`、②`troubleshooting-faq`、③`product/usersearch-2.0`、④`usersearch.com` 首页、⑤`credits-and-pricing`、⑥`mrtechking` —— **均已由本人此前亲自 WebFetch / WebSearch 取得**（对应 P02/X1、P03/X2、P09、P10/P12、P15、P16），并已分别归位到 §C.1 / §F / §E.3b / §D.2b / §E.3b / §D.2b；**仅 `usersearch.org/features.php`（P20）为单方提供、未本人复核**，已如实标注。team-lead 的两份逐字原文摘录（X1/X2，`recon/team-lead-crosscheck.md`）按其要求**以引用方式纳入、不重抄大段原文**。
 
 ---
 
