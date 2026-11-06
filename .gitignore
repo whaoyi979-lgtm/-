@@ -1,0 +1,25 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+
+# Local tooling / caches (keep the repo reproducible)
+node_modules/
+dist/
+build/
+coverage/
+test-results/
+playwright-report/
+*.log
+
+# Secrets never belong in a repo
+.env
+.env.*
+!.env.example
+
+# WorkBuddy session data is project state, not source
+.workbuddy/
+
+# Local-only recon artifacts (raw dumps are not deliverables)
+recon/raw/
