@@ -146,7 +146,7 @@
 
 ## 6. 网络与前端技术特征
 
-【A·实测】仅能确认：`usersearch.ai` 前有 Cloudflare 质询层（403 + `Just a moment...` + 指向 `challenges.cloudflare.com` 的 CSP）；`/m/` 路径下存在登录、注册、重置密码等路由；登录页引用了 `https://usersearch.ai/assets/images/icons/google.png` 这一静态资源路径。
+【A·实测，含侦察员补充】可确认：`usersearch.ai` 前有 Cloudflare 质询层（403 + `Just a moment...` + 指向 `challenges.cloudflare.com` 的 CSP）；`/m/` 路径下存在登录、注册、重置密码等路由；登录页 HTML 引用带 **8 位内容哈希**的 `/m/assets/logo-*.jpg/.png`（Vite 风格构建产物命名），说明 `/m/` 是 SPA 构建产物入口并存在客户端路由（`/m/` 渲染 `AI Agent | UserSearch 2.0` + `No chat history yet`，与 `/m/search` 的登录页不同）；公开静态资源 `/assets/images/icons/google.png`(200, 382B)、`/favicon.ico`(200, 20848B) 可达；`/help/` 是**独立的 DokuWiki 系统**（`doku.php?id=...`，15 页索引），与 `/m/` SPA 是两套系统；登录页含 `Toggle theme` 明暗主题控件，官方器文档称已发布截图默认为深色主题；公开 Wiki 订阅页显示平台由 Stripe 支付。`/robots.txt`、`/sitemap.xml`、`/about`、`/terms`、`/privacy` 均为 404。
 
 **以下内容本次不可得，且没有尝试获取**：SPA 框架与版本、bundle/chunk 清单、source map、API 基址与路径、请求方法/参数位置/响应结构、鉴权方式（Cookie / Token / 会话）、错误码体系、真实接口流量。原因：均需登录态或需绕过访问限制，超出用户给定的合规边界。对应 `spa-contract-rebuild` 的 `unpack_spa.js` / `probe_contract.js` / `ab_probe.js` / `login_diag.js` 因此**均未对目标站运行**（脚本存在且已核对，Node v22.22.2 可用）。
 
@@ -193,3 +193,70 @@
 | 留存与模式（X1） | Case 列表、书签、保留/隐私模式对历史的差异 |
 
 > 所有名称、数据、配色、图标、文案均为自有/合成；详见交付报告的「被替换素材清单」。
+
+---
+
+## 10. 阶段 1 收敛后的补充结论
+
+> 来源：`recon/evidence-pack.md`（侦察员，473 行，A–I 九节 + 4 附录）。本节为对其的新增发现汇编；若与前文表述有出入，以本节与证据包为准。证据编号沿用证据包：E 系列＝本次实测，P 系列＝公开文档/官方页。
+
+### 10.1 新发现的公开可达路径【A·实测】
+
+| 路径 | 结果 | 价值 |
+|---|---|---|
+| `/m/auth/reset-password` | 公开内容页 `Password Recovery`，含邮箱字段与 `Send Code` 按钮 | **第二个可直接观察的 `/m/` 页面**，纳入复刻页面清单 |
+| `/help` + `/help/doku.php?do=index` | 公开 DokuWiki，15 页索引（账号管理、基础/高级面板、书签、Case、监控、隐私、报告、路线图、订阅、条款等） | 提供版本与旧版 UI 线索，但 2023 年文案不可当现行界面 |
+| `/help/doku.php?id=roadmap` | 2026-10-30 更新，`Current Version 2.0.23`，2.0.24 计划含 OneQuery API | 版本口径证据 |
+| `/help/doku.php?id=subscriptions` | 免费 / 月付 / 季付 / 年付四档 + Stripe | 额度与订阅页的公开依据（实现用占位金额） |
+| `/m/search?q=test` | 仍返登录页，但暴露完整 HTML：双版 logo、`Toggle theme`、Support/隐私/条款/DPA/合规链接**全部指向 `usersearch.com/*`** | `.ai` 登录应用与 `.com` 官网/文档同属一个产品族的实测证据 |
+| `/m/`、`/api`、`/pricing*` | `/m/` 返 AI Agent 壳；`/api` 返 challenge 且未暴露任何 endpoint 文本；`/pricing*` 回退登录页 | 未据此推断接口 |
+
+**通道差异（如实记录）**：朴素 `curl` 对 `.ai` 几乎所有路径返 403，而 WebFetch 能读到登录页、重置密码页与整站 Wiki 文本；成因未验证，本次未做任何绕过尝试。不能把 WebFetch 的结果说成 curl 也能拿到。
+
+### 10.2 页面结构补全【B·公开文档，P01/P07/P08/P14】
+
+| 区块 | 补充的可见元素 |
+|---|---|
+| 全局 | 主题切换、Ctrl+K 命令面板、通知、应用宫格、账户菜单；左导航含额度/团队/面板/书签/报告/历史/Case/帮助/登出 |
+| 面板头 | 标题、`Status (N)` 健康度药丸、`Mobile` 药丸、**视图分段控件（普通 / 高级 / 智能体）**、Case 选择、保留模式 |
+| 查询区 | 头部：放大镜标题 → 搜索类型下拉 → 批量复选 → 额度药丸 → 溢出菜单；其下 **约 4 列模块卡片网格**（单选、每类固定默认最左卡、选中高亮、含数据源子标签/描述符/info/gear/「推荐」徽章）→ 描述面板 → 查询框 + 主按钮 → 单次成本行 |
+| 结果区 | `结果` / `书签` 双 tab；三计数 tile；`Filter` 下拉；智能分析 / 追问 / 导出 / 清空；下方 `详情` / `档案视图` / `关系图` 三详情 tab |
+| 配置弹窗 | 两种变体：①过滤型（扫描上限 / 检索类型 / 站点地区 三下拉）②来源开关型（逐行复选 + 单项成本 + 总成本 + 记住选择）；底部 关闭 / 重置 / 应用筛选 |
+| 高级视图 | 增加 Case 面板（选 Case、新建、书签数、最后更新）与 Case 历史面板（事件 / 时间两列）；智能体视图整页替换为推广卡 |
+
+### 10.3 输入项与结果字段补全【B】
+
+- 输入框 **label 随模块变化**（`Search query` / `Username` / `Search Query` / `Reddit Username`），placeholder 为 `Enter a search term` 一类；成本行示例 `Cost per search: Free`、`$1.20 | Dynamic (0.50 - 1.20)`。
+- **结果表列随模块变化**，且官方文档给出 4 组互相不一致的列集：单源模块 `Bookmark·Site·Enriched·Connection·Profile URL`；多源模块 `Bookmark·Enriched·Found On·Data Source`；术语表 `Found On·Data Source·Status·Enriched`；普通视图 `#·USERNAME·SOURCE·STATUS·ENRICHED`。**不能断定唯一列集**。
+- 三计数含义：`Found`＝在站点/来源上定位到（绿）、`Enriched`＝其中带额外元数据的条数（橙，严格子集）、`Connections`＝实体关联簇数（白）。详情区另有 `MATCH ACCURACY`（由第三方源给出，非平台计算）、富化元数据（平台、用户 ID、建号时间、关注数、头像链接、可能姓名、关联邮箱等）。
+- 分页：仅有「竖直滚动条说明下方还有更多行」的描述，**未文档化任何分页控件**。
+- 导出：`Export` 为当前结果临时下载，`Report` 为保存到 Case 的生成物；不同页面分别称 `.xlsx` / `PDF·CSV` / `PDF·DOC·EXCEL`，口径不完全一致。
+
+### 10.4 状态与边界补全【B】
+
+| 补充状态 | 要点 |
+|---|---|
+| 关联线索为空 | `No connections found` / `CONNECTIONS 0`；官方器文档自述**计数器可能与详情区矛盾**（曾出现计数 15 而详情为空），并提醒不要假定关系图已填充 → 这是数据口径差异，不是错误 |
+| 加载态 | 当前 v2.0 无 spinner/骨架的实测；`.ai` 2023 Wiki 称「结果异步逐步填充」，roadmap 有 `Load results Async` / `Streaming response` → 可推断为**逐行流入**，但属旧版文档推断，未经目标页验证 |
+| 输入校验 | 官方文档只给「处置建议」（去空格、勿传完整 URL、字段名与模块匹配、确认类型接受该标识符），**未给实测校验规则或报错文案** |
+| 网络异常 / 5xx / 超时 | 官方文档**无任何 HTTP 错误分支文案**，本次无流量捕获 → 未知 |
+| 空输入 / 超长 / 特殊字符 / 多结果排序 | 同上，未知 |
+| 批量上限 | `Bulk search` ≤ 5 条（强证据）；旧版 Wiki 另有「每账户 ≤ 5 个监控」（旧版，未验证现行） |
+
+### 10.5 官方文档自身的矛盾（必须如实保留，不得挑一个当事实）
+
+| 矛盾 | 出处 |
+|---|---|
+| Search types：17 vs 18 | Glossary vs getting-started/searching、product 页 |
+| Modules：80+ vs ~107 | 同上 |
+| 结果表列集：4 组互不一致 | P05/P06/P07/P08 |
+| 版本：`2.0.20`（文档页脚）/ `2.0.22`（Wiki 首页）/ `2.0.23`（roadmap）/ `2.0.24`（计划） | E08/E17/P03 |
+| 2023 年 Wiki 的 Basic/Advanced Dashboard 描述 vs v2.0 文档 | 旧 UI 不可当现行 |
+
+因此实现里**所有数量、价格、模块名、数据源名一律占位**，不声称与原站一致。
+
+### 10.6 对门禁的影响（组长裁决）
+
+- **G1**：证据包 A–I 九节齐全、每条结论可回溯、事实与推测分开、未知项单列、采集通道与限制写明 → **结构与状态层面的证据充分**。但 §C.4「交互→请求→脚本对照表」与 §E.4「数据契约」**为空表**，原因是目标页需登录且禁止绕过。
+- **裁决**：H-1（登录后真实 DOM）与 H-2（真实 API 契约）属**用户合规边界内不可解**的阻塞性未知项，补侦察需要登录或绕过 challenge，与用户明确要求冲突。故**显式接受为交付遗留项**，采用「公开文档驱动的行为复刻 + 全量占位数据」路线：**不声称网络层/像素级一致**，把这两轴在验证阶段标为「不可比」，并在交付报告中写明原因。蓝图禁止编造任何接口路径或响应字段。
+- 若日后取得授权（自有测试账号 + 明确许可），可回到阶段 1 补齐 H-1/H-2，再谈网络与视觉一致性。
