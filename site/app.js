@@ -17,7 +17,23 @@
   var D = globalThis.ReplicaData;
   var C = globalThis.ReplicaCore;
   var app = document.getElementById('app');
-  var ROUTES = ['signin', 'search', 'credits', 'cases'];
+  // E04: 新增重置密码页路由（登录页给出链接）
+  var ROUTES = ['signin', 'reset', 'search', 'credits', 'cases'];
+
+  // G-03/E12: 主题读取与持久化。file:// 下 localStorage 可能抛异常，用 try/catch 兜底；
+  // 只持久化「主题偏好」，不持久化任何凭证 / 会话（合规：本地纯演示）。
+  function readTheme() {
+    try {
+      var v = globalThis.localStorage && globalThis.localStorage.getItem(D.theme.storageKey);
+      return (v === 'dark' || v === 'light') ? v : D.theme.defaultTheme;
+    } catch (e) { return D.theme.defaultTheme; }
+  }
+  function persistTheme(v) {
+    try { globalThis.localStorage.setItem(D.theme.storageKey, v); } catch (e) { /* file:// 兜底 */ }
+  }
+  function applyTheme() {
+    try { document.documentElement.setAttribute('data-theme', state.theme); } catch (e) { /* noop */ }
+  }
 
   // ---------------------------------------------------------------------------
   // 内存态（刷新即复位；无任何真实凭证、无任何持久化副作用）
@@ -41,6 +57,8 @@
     batch: [''],
     mode: 'keep',
     caseId: D.cases[0].id,
+    cases: D.cases.slice(),       // P14: 高级视图可新建本地演示 Case
+    analysis: '',                 // P05: 智能分析占位结论
 
     // 结果面板
     result: C.initialResult(),
@@ -65,7 +83,23 @@
     menuOpen: false,
     toast: '', toastOk: false,
     toastTimer: null,
-    runTimer: null
+    runTimer: null,
+
+    // 切片 4 新增 UI 状态（P01/P03/P05/P07/P08/P14/E12/E04/G-03）
+    theme: readTheme(),           // G-03: 浅/深主题，持久化键见 data.js
+    view: 'basic',                // P07/P14: 普通 / 高级 / 智能体视图
+    entityTab: 'all',             // P01/P03: 实体类型横向页签，默认「全部」
+    resultTab: 'results',         // P05: 结果 / 书签 双 tab
+    detailTab: 'detail',          // P08: 详情 / 档案视图 / 关系图
+    modalVariant: 'filter',       // P01/P03: 配置弹窗双变体
+    rememberSources: false,
+    rememberFilters: false,
+    savedSourceIds: null, savedFilters: null,   // 「记住我的选择」的本地演示记忆
+    overflowOpen: false,          // P04: 构成区头部溢出菜单
+    resetEmail: '', resetSent: false,
+    streamCount: 0, streamTimer: null,   // F-09: 结果逐行流入
+    sortKey: '', sortDir: 'asc',         // E.2: 表头排序箭头
+    askOpen: false, askText: ''          // P05: 追问
   };
 
   // ---------------------------------------------------------------------------
@@ -112,22 +146,73 @@
     return C.computeCost(m, ids, D.sources, batchCount());
   }
   function caseById(id) {
-    for (var i = 0; i < D.cases.length; i++) { if (D.cases[i].id === id) { return D.cases[i]; } }
-    return D.cases[0];
+    for (var i = 0; i < state.cases.length; i++) {
+      if (state.cases[i].id === id) { return state.cases[i]; }
+    }
+    return state.cases[0] || D.cases[0];
   }
   function routeFromHash() {
     var h = String(location.hash || '').replace(/^#\/?/, '').split('?')[0];
     return ROUTES.indexOf(h) >= 0 ? h : null;
   }
 
+  // F-09: 结果异步逐步填充（基于旧版 Wiki 文字描述的「推断」，未经目标页验证）。
+  // 用 setInterval 逐行增加可见行数，纯前端演示，不发起任何真实请求。
+  var STREAM_MAX = 6;
+  function startStreaming() {
+    stopStreaming();
+    state.streamCount = 0;
+    state.streamTimer = setInterval(function () {
+      if (state.result.phase !== 'loading') { stopStreaming(); return; }
+      state.streamCount += 1;
+      if (state.streamCount >= STREAM_MAX) { stopStreaming(); }
+      render();
+    }, 240);
+  }
+  function stopStreaming() {
+    if (state.streamTimer) { clearInterval(state.streamTimer); state.streamTimer = null; }
+  }
+  function themeButton() {
+    var dark = state.theme === 'dark';
+    return '<button class="btn btn-sm btn-icon theme-btn" type="button" data-act="theme-toggle" ' +
+      'aria-label="切换主题" title="' + (dark ? '切换为浅色' : '切换为深色') + '">' +
+      icon(dark ? 'sun' : 'moon', 'ic-sm') + '</button>';
+  }
+
   // ---------------------------------------------------------------------------
   // S1 渲染：登录视图（X3 可见结构；品牌与文案全部自有）
   // ---------------------------------------------------------------------------
+  // E12/E01: 登录页不止表单 —— 页头含品牌 / 支持入口 / 主题切换 / 加入入口；
+  //          页脚含注册入口 / 隐私 / 条款 / 数据处理 / 合规 / 版权。
+  function renderAuthShell(inner) {
+    var heads = D.signinHeader.map(function (x) {
+      return '<button class="link-btn" type="button" data-act="signin-info" data-topic="' +
+        esc(x.label) + '">' + esc(x.label) + '</button>';
+    }).join('');
+    var foots = D.signinFooter.map(function (x) {
+      return '<button class="link-btn" type="button" data-act="signin-info" data-topic="' +
+        esc(x.label) + '">' + esc(x.label) + '</button>';
+    }).join('');
+    return '' +
+      '<div class="signin-page">' +
+        '<header class="signin-top">' +
+          '<div class="brand"><div class="brand-logo">' + icon('logo') + '</div>' +
+            '<div><div class="brand-name">' + esc(D.brand.name) + '</div>' +
+            '<div class="brand-product">' + esc(D.brand.product) + '</div></div></div>' +
+          '<div class="signin-top-links">' + heads + themeButton() + '</div>' +
+        '</header>' +
+        '<main class="signin-wrap">' + inner + '</main>' +
+        '<footer class="signin-bottom"><div class="signin-bottom-links">' +
+          '<button class="link-btn" type="button" data-act="register">注册演示账号</button>' + foots +
+          '</div><div class="tiny">© 2026 ' + esc(D.brand.name) + ' · ' + esc(D.brand.version) +
+          ' · 纯前端演示，无外部请求</div></footer>' +
+      '</div>';
+  }
+
   function renderSignin() {
     // X3: 邮箱 / 密码 / 记住登录 / 登录按钮 / or 分隔 / 邮件登录链接 /
     //     第三方登录按钮 / 注册与忘记密码链接
-    return '' +
-      '<div class="signin-wrap"><div class="signin-card">' +
+    return renderAuthShell('<div class="signin-card">' +
         '<div class="signin-brand">' +
           '<div class="signin-logo">' + icon('logo', 'ic-lg') + '</div>' +
           '<div><p class="signin-title">' + esc(D.brand.name) + ' · ' + esc(D.brand.product) + '</p>' +
@@ -157,7 +242,26 @@
           '<button class="link-btn" type="button" data-act="forgot">忘记密码？</button>' +
         '</div>' +
         '<div class="signin-note">演示说明：任意非空邮箱 + 至少 6 位密码即可进入；这是本地演示会话，不涉及真实凭证或外部鉴权。</div>' +
-      '</div></div>';
+      '</div>');
+  }
+
+  // E04: 重置密码页 —— 邮箱输入 + 发送验证码按钮；纯前端演示，不发真实邮件。
+  function renderReset() {
+    return renderAuthShell('<div class="signin-card">' +
+        '<div class="signin-brand">' +
+          '<div class="signin-logo">' + icon('logo', 'ic-lg') + '</div>' +
+          '<div><p class="signin-title">' + esc(D.resetCopy.title) + '</p>' +
+          '<p class="signin-sub">' + esc(D.brand.name) + ' · ' + esc(D.brand.product) + '</p></div>' +
+        '</div>' +
+        '<p class="tiny" style="margin:0 0 16px">' + esc(D.resetCopy.desc) + '</p>' +
+        '<label class="field"><span class="field-label">邮箱</span>' +
+          '<input class="input" type="text" data-field="reset-email" placeholder="例如 demo@north.invalid" value="' +
+          esc(state.resetEmail) + '"></label>' +
+        (state.resetSent ? '<div class="hint-box" style="margin-bottom:12px">' + icon('check', 'ic-sm') + ' ' +
+          esc(D.resetCopy.codeSent) + '</div>' : '') +
+        '<button class="btn btn-primary btn-block" type="button" data-act="reset-send">发送验证码</button>' +
+        '<div class="signin-foot"><button class="link-btn" type="button" data-act="reset-back">返回登录</button></div>' +
+      '</div>');
   }
 
   // ---------------------------------------------------------------------------
@@ -183,6 +287,7 @@
             '<button type="button" data-act="mode" data-mode="keep" class="' + (state.mode === 'keep' ? 'active' : '') + '">保留模式</button>' +
             '<button type="button" data-act="mode" data-mode="private" class="' + (state.mode === 'private' ? 'active' : '') + '">隐私模式</button>' +
           '</div>' +
+          themeButton() +
           '<div class="menu-wrap">' +
             '<button class="btn btn-sm btn-icon" type="button" data-act="menu" aria-label="用户菜单">' + icon('menu') + '</button>' +
             (state.menuOpen ?
@@ -208,6 +313,74 @@
         icon(it.id === 'search' ? 'search' : it.id === 'credits' ? 'wallet' : 'bookmark', 'ic-sm') + esc(it.label) + '</a>';
     });
     return out + '</nav>';
+  }
+
+  // P07/P14: 工作台顶栏视图分段（普通 / 高级 / 智能体，全部自造中文名）
+  function renderViewBar() {
+    var segs = D.views.map(function (v) {
+      return '<button type="button" data-act="view" data-view="' + esc(v.id) + '"' +
+        (state.view === v.id ? ' class="active" title="' + esc(v.hint) + '"' : ' title="' + esc(v.hint) + '"') +
+        '>' + esc(v.label) + '</button>';
+    }).join('');
+    var cur = D.views.filter(function (v) { return v.id === state.view; })[0] || D.views[0];
+    return '<div class="view-bar"><span class="view-bar-label">' + icon('grid', 'ic-sm') + ' 视图</span>' +
+      '<div class="seg" role="group" aria-label="工作台视图">' + segs + '</div>' +
+      '<span class="tiny">' + esc(cur.hint) + '</span></div>';
+  }
+
+  // P14: 智能体视图整页替换为推广卡 + 进入按钮（自造文案，不含真实自动化服务）
+  function renderAgentView() {
+    var p = D.agentPromo;
+    var pts = p.points.map(function (x) {
+      return '<li>' + icon('check', 'ic-sm') + esc(x) + '</li>';
+    }).join('');
+    return '<div class="agent-wrap"><div class="agent-card">' +
+      '<span class="tag tag-info">' + esc(p.tag) + '</span>' +
+      '<div class="agent-icon">' + icon('spark', 'ic-lg') + '</div>' +
+      '<h1 class="h1">' + esc(p.title) + '</h1>' +
+      '<p class="tiny" style="max-width:520px;margin:8px auto 18px">' + esc(p.desc) + '</p>' +
+      '<ul class="agent-points">' + pts + '</ul>' +
+      '<div class="agent-actions">' +
+        '<button class="btn btn-primary" type="button" data-act="agent-enter">' +
+          icon('spark', 'ic-sm') + '进入智能体视图</button>' +
+        '<button class="btn" type="button" data-act="view" data-view="basic">返回普通视图</button>' +
+      '</div>' +
+      '<div class="hint-box" style="margin-top:18px">此视图为纯前端占位，' +
+        '不含任何真实智能体服务或外部调用；切换状态请回到「状态演练」。</div>' +
+      '</div></div>';
+  }
+
+  // P07/P14: 高级视图在普通视图之上增加 Case 面板与 Case 历史面板
+  function renderAdvancedPanels() {
+    var cs = caseById(state.caseId);
+    var bms = state.bookmarks.length;
+    var lastAt = state.history.length ? state.history[state.history.length - 1].at : '暂无记录';
+    var picks = state.cases.map(function (c) {
+      return '<option value="' + esc(c.id) + '"' + (c.id === state.caseId ? ' selected' : '') + '>' +
+        esc(c.name) + '</option>';
+    }).join('');
+    var evs = D.caseEvents.map(function (e) {
+      return '<tr><td>' + esc(e.event) + '</td><td class="nowrap">' + esc(e.at) + '</td></tr>';
+    }).join('');
+    return '<div class="advanced-grid">' +
+      '<section class="panel"><div class="panel-head"><h2 class="h3">Case 面板</h2>' +
+        '<span class="pill">高级视图</span></div><div class="panel-body">' +
+        '<label class="field"><span class="field-label">选择 Case</span>' +
+          '<select class="select" data-field="adv-case">' + picks + '</select></label>' +
+        '<div class="case-stats">' +
+          '<div><span class="tiny">当前 Case</span><div class="strong">' + esc(cs.name) + '</div></div>' +
+          '<div><span class="tiny">书签数</span><div class="strong">' + bms + ' 条</div></div>' +
+          '<div><span class="tiny">最后更新</span><div class="strong">' + esc(lastAt) + '</div></div>' +
+        '</div>' +
+        '<button class="btn btn-sm" type="button" data-act="case-create" style="margin-top:12px">' +
+          icon('plus', 'ic-sm') + '新建 Case（演示）</button>' +
+        '</div></section>' +
+      '<section class="panel"><div class="panel-head"><h2 class="h3">Case 历史</h2>' +
+        '<span class="pill">' + D.caseEvents.length + ' 条</span></div>' +
+        '<div class="panel-body"><div class="table-scroll"><table class="grid">' +
+        '<thead><tr><th>事件</th><th>时间</th></tr></thead><tbody>' + evs +
+        '</tbody></table></div><div class="tiny" style="margin-top:9px">事件 / 时间两列，全部为合成占位记录。</div>' +
+        '</div></section></div>';
   }
 
   // 状态演练条（验证脚手架，推断；仅工作台显示）
@@ -243,10 +416,8 @@
     var reasons = res.meta && res.meta.reasons && res.meta.reasons.length
       ? '<ul class="reason-list">' + res.meta.reasons.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul>'
       : '';
-    var skeleton = res.phase === 'loading'
-      ? '<div class="skeleton"><div class="sk-line w90"></div><div class="sk-line w70"></div><div class="sk-line w50"></div></div>' +
-        '<div class="progress"><i></i></div>'
-      : '';
+    // F-09: 加载态的骨架 / 进度 / 逐行流入统一由 renderStreaming() 负责，避免重复渲染
+    var skeleton = '';
     return '' +
       '<div class="state-card">' +
         '<div class="state-head">' +
@@ -271,7 +442,10 @@
   // S1 渲染：搜索视图布局（三栏，移动端堆叠；结果面板在右/下）
   // ---------------------------------------------------------------------------
   function renderSearchView() {
-    return '<div class="workbench">' + renderTypeNav() + renderComposer() + renderResult() + '</div>';
+    // P14: 智能体视图整页替换；高级视图追加 Case 面板；普通视图保持三栏工作台。
+    if (state.view === 'agent') { return renderAgentView(); }
+    var base = '<div class="workbench">' + renderTypeNav() + renderComposer() + renderResult() + '</div>';
+    return state.view === 'advanced' ? base + renderAdvancedPanels() : base;
   }
 
   /* ==== SLICE2:BEGIN ==== *
@@ -297,7 +471,7 @@
 
   // X1-步骤1: 18 类搜索类型导航（全部可交互，切换联动模块列表）
   function renderTypeNav() {
-    var out = '<section class="panel"><div class="panel-head"><h2 class="h3">① 搜索类型</h2>' +
+    var out = '<section class="panel wb-nav"><div class="panel-head"><h2 class="h3">① 搜索类型</h2>' +
       '<span class="pill">' + D.searchTypes.length + ' 类</span></div><div class="type-nav">';
     D.searchTypes.forEach(function (t) {
       out += '<button class="type-item' + (t.id === state.activeTypeId ? ' active' : '') +
@@ -307,24 +481,47 @@
     return out + '</div></section>';
   }
 
-  // X1-步骤2: 模块卡（名称 / 说明 / 成本类型标签 / 成本 / 推荐 / 选中高亮 / 齿轮）
+  // P01/P04: 模块卡（标题 / 数据源子标签 / 描述符 / info 图标 / 部分有 gear / 推荐 / 选中高亮）
+  function moduleSourceLabel(m) {
+    if (m.cost.kind === 'dynamic') {
+      return '多来源 · 已选 ' + state.selectedSourceIds.length + ' 个';
+    }
+    var s = C.findSource(D.sources, m.sourceIds[0]);
+    return '单来源 · ' + (s ? s.name : '未指定');
+  }
   function renderModuleCard(m) {
     var ids = m.cost.kind === 'dynamic' ? state.selectedSourceIds : m.sourceIds;
     var c = C.computeCost(m, ids, D.sources, 1);
     var tagCls = m.cost.kind === 'free' ? 'tag-free' : m.cost.kind === 'fixed' ? 'tag-fixed' : 'tag-dynamic';
-    return '<div class="module-card' + (m.id === state.activeModuleId ? ' active' : '') +
+    var active = m.id === state.activeModuleId;
+    var hasGear = m.cost.kind !== 'free';   // P01: 只有部分卡片带配置齿轮
+    return '<div class="module-card' + (active ? ' active' : '') +
       '" data-act="module" data-module-id="' + esc(m.id) + '">' +
       '<div class="module-top"><div class="module-name">' + esc(m.name) + '</div>' +
         (m.recommended ? '<span class="tag tag-rec">推荐</span>' : '') +
-        '<button class="gear-btn" type="button" data-act="gear" data-module-id="' + esc(m.id) +
-          '" title="选择数据源 / 过滤器" aria-label="配置数据源与过滤器">' + icon('gear', 'ic-sm') + '</button>' +
+        (hasGear ? '<button class="gear-btn" type="button" data-act="gear" data-module-id="' + esc(m.id) +
+          '" title="选择数据源 / 过滤器" aria-label="配置数据源与过滤器">' + icon('gear', 'ic-sm') + '</button>' : '') +
       '</div>' +
+      '<div class="module-src">' + icon('link', 'ic-sm') + esc(moduleSourceLabel(m)) + '</div>' +
       '<div class="module-desc">' + esc(m.desc) + '</div>' +
       '<div class="module-meta">' +
         '<span class="tag ' + tagCls + '">' + esc(C.COST_LABELS[m.cost.kind]) + '</span>' +
         '<span class="module-cost">' + (m.cost.kind === 'free' ? '0 点' : c.perSearch + ' 点') + '</span>' +
-        (m.id === state.activeModuleId ? '<span class="pill pill-indigo">已选中</span>' : '') +
+        '<button class="info-mark" type="button" data-act="module-info" data-module-id="' + esc(m.id) +
+          '" title="' + esc(m.inputHint || m.desc) + '" aria-label="模块说明">' + icon('info', 'ic-sm') + '</button>' +
+        (active ? '<span class="pill pill-indigo">已选中</span>' : '') +
       '</div></div>';
+  }
+
+  // P01/P03: 实体类型横向页签，默认「全部」，右侧带过滤齿轮
+  function renderEntityTabs() {
+    var tabs = D.entityTabs.map(function (x) {
+      return '<button type="button" class="entity-tab' + (state.entityTab === x.id ? ' active' : '') +
+        '" data-act="entity" data-entity="' + esc(x.id) + '">' + esc(x.label) + '</button>';
+    }).join('');
+    return '<div class="entity-bar"><div class="entity-tabs" role="tablist" aria-label="实体类型">' + tabs +
+      '</div><button class="btn btn-sm btn-icon" type="button" data-act="entity-gear" ' +
+      'title="打开来源 / 过滤配置" aria-label="过滤设置">' + icon('filter', 'ic-sm') + '</button></div>';
   }
 
   function selectField(field, label, options, cur) {
@@ -335,20 +532,47 @@
       }).join('') + '</select></label>';
   }
 
-  // X1-步骤4: 查询构成区（按类型切占位符/校验规则、单次成本行、批量、模式、Case、立即查询）
+  // X1-步骤4 / P01/P04: 查询构成区解剖
+  //   头部：标题(放大镜) → 搜索类型下拉 → 批量复选 → 额度药丸 → 溢出菜单
+  //   其下：~4 列模块卡网格 → 描述面板 → 实体页签 → 查询输入 + 主按钮 → 单次成本行
   function renderComposer() {
     var t = currentType(), m = currentModule(), c = currentCost(), n = batchCount();
-    var h = '<section class="panel"><div class="panel-head">' +
-      '<h2 class="h3">② 模块与查询 · ' + esc(t.label) + '</h2>' +
-      '<button class="pill pill-indigo" type="button" data-act="gear" data-module-id="' + esc(m.id) + '">' +
-        icon('gear', 'ic-sm') + '配置数据源</button></div><div class="panel-body">';
+    var typeOptions = D.searchTypes.map(function (x) {
+      return '<option value="' + esc(x.id) + '"' + (x.id === t.id ? ' selected' : '') + '>' +
+        esc(x.label) + '</option>';
+    }).join('');
+    var h = '<section class="panel wb-composer"><div class="composer-head">' +
+      '<div class="composer-title">' + icon('search', 'ic-sm') + '<h2 class="h3">② 模块与查询</h2></div>' +
+      '<select class="select" data-field="composer-type" aria-label="搜索类型下拉">' + typeOptions + '</select>' +
+      '<label class="check head-batch"><input type="checkbox" data-field="batch-on-head"' +
+        (state.batchOn ? ' checked' : '') + '>批量</label>' +
+      '<a class="pill pill-indigo" href="#/credits">' + icon('wallet', 'ic-sm') +
+        '额度 ' + state.credits + ' ' + esc(D.credits.unit) + '</a>' +
+      '<div class="menu-wrap"><button class="btn btn-sm btn-icon" type="button" data-act="overflow" ' +
+        'aria-label="更多操作">' + icon('menu', 'ic-sm') + '</button>' +
+        (state.overflowOpen ? '<div class="menu menu-right">' +
+          '<button class="menu-item" type="button" data-act="overflow-config">' +
+            icon('gear', 'ic-sm') + '配置数据源 / 过滤</button>' +
+          '<button class="menu-item" type="button" data-act="overflow-reset">' +
+            icon('retry', 'ic-sm') + '重置构成区</button>' +
+          '<button class="menu-item" type="button" data-act="overflow-help">' +
+            icon('info', 'ic-sm') + '查看流程说明</button>' +
+          '</div>' : '') + '</div></div><div class="panel-body">';
 
-    // X1-步骤2: 模块列表联动当前类型
-    h += '<div class="module-list">' + modulesForType().map(renderModuleCard).join('') + '</div>';
+    // P01/P04: 卡片网格（约 4 列）；X1-步骤2: 切换类型整组替换模块卡
+    h += '<div class="module-grid">' + modulesForType().map(renderModuleCard).join('') + '</div>';
+    // P01: 描述面板（当前选中模块的说明）
+    h += '<div class="module-detail">' + icon('info', 'ic-sm') + '<div>' +
+      '<div class="strong">' + esc(m.name) + '　<span class="pill">' + esc(t.label) + '</span></div>' +
+      '<div class="tiny">' + esc(m.desc) + '</div>' +
+      '<div class="tiny">输入项：' + esc(m.inputLabel) + '　|　来源：' + esc(moduleSourceLabel(m)) +
+      '　|　成本：' + esc(C.COST_LABELS[m.cost.kind]) + '</div></div></div>';
+    // P01/P03: 实体类型横向页签（默认「全部」）
+    h += renderEntityTabs();
     h += '<div class="divider"></div>';
 
-    // X1-步骤4: 输入（占位符与校验规则随类型切换；至少 8 种规则）
-    h += '<label class="field"><span class="field-label">③ 查询内容（校验规则：' +
+    // X1-步骤4 / D.2: 输入框 label 随「模块」变化，placeholder 为自造中文
+    h += '<label class="field"><span class="field-label">③ ' + esc(m.inputLabel) + '（校验规则：' +
       esc(C.ruleFor(t.inputKind).label) + '）</span>' +
       '<input class="input" type="text" data-field="query" placeholder="' + esc(t.placeholder) +
       '" value="' + esc(state.query) + '"' + (state.batchOn ? ' disabled' : '') + '></label>';
@@ -375,10 +599,14 @@
       h += '</div>';
     }
 
-    // X1-步骤4: 单次成本行（成本 + 批量合计，实时反映来源/条数）
+    // D.2: 成本行三档文案（免费 / 固定金额 / 浮动金额 + 区间）
+    var rangeNote = c.kind === 'dynamic'
+      ? '浮动区间 ' + m.cost.min + ' – ' + m.cost.max + ' 点（占位，非原站价格）'
+      : c.kind === 'fixed' ? '固定成本，不随来源变化' : '免费模块，不消耗额度';
     h += '<div class="cost-row"><div>' +
       '<div class="field-label" style="margin:0">④ 单次成本（' + esc(c.label) + '）</div>' +
-      '<div class="tiny">' + esc(costDetail(c, m)) + '</div></div>' +
+      '<div class="tiny">' + esc(costDetail(c, m)) + '</div>' +
+      '<div class="tiny">' + esc(rangeNote) + '</div></div>' +
       '<div style="text-align:right"><div class="cost-value">' + c.perSearch + ' 点 / 条</div>' +
       '<div class="tiny">共 ' + n + ' 条 → 本次合计 ' + c.total + ' 点</div></div></div>';
 
@@ -389,7 +617,7 @@
         '<option value="private"' + (state.mode === 'private' ? ' selected' : '') + '>隐私模式（不写历史）</option>' +
       '</select></label>' +
       '<label class="field"><span class="field-label">留存 Case</span><select class="select" data-field="case-select">' +
-      D.cases.map(function (cs) {
+      state.cases.map(function (cs) {
         return '<option value="' + esc(cs.id) + '"' + (cs.id === state.caseId ? ' selected' : '') + '>' +
           esc(cs.name) + '</option>';
       }).join('') + '</select></label></div>';
@@ -401,43 +629,66 @@
     return h + '</div></section>';
   }
 
-  // X1-步骤3 / X1-步骤3 / X2-④: 齿轮 → 选择数据源 / 过滤器弹窗
+  // P01/P03: 配置弹窗两种变体
+  //   ① 过滤变体 = 扫描上限 / 检索类型 / 站点地区 三个下拉 + 记住选择复选
+  //   ② 来源开关变体 = 逐行复选框 + 单项成本 + 总成本 + 记住我的选择复选
+  //   底部三按钮：关闭 / 重置 / 应用筛选；关闭来源实时从总成本移除（X1-步骤3）。
   function renderSourceModal() {
     if (!state.modalOpen) { return ''; }
     var m = currentModule(), draft = state.draftSourceIds || [], f = state.draftFilters || {};
     var c = C.computeCost(m, m.cost.kind === 'dynamic' ? draft : m.sourceIds, D.sources, batchCount());
     var fd = D.filterDefaults;
+    var tabs = D.modalVariants.map(function (v) {
+      return '<button type="button" class="modal-tab' + (state.modalVariant === v.id ? ' active' : '') +
+        '" data-act="modal-variant" data-variant="' + esc(v.id) + '">' + esc(v.label) + '</button>';
+    }).join('');
     var h = '<div class="modal-mask" data-act="modal-mask"><div class="modal" role="dialog" aria-modal="true" ' +
-      'aria-label="选择数据源与过滤器" data-act="modal-inner">' +
-      '<div class="modal-head"><div><h2 class="h2">选择数据源 / 过滤器</h2>' +
-        '<div class="tiny">' + esc(m.name) + '</div></div>' +
+      'aria-label="配置数据源与过滤器" data-act="modal-inner">' +
+      '<div class="modal-head"><div><h2 class="h2">配置数据源 / 过滤器</h2>' +
+        '<div class="tiny">' + esc(m.name) + '　·　两种配置变体（P01/P03）</div></div>' +
         '<button class="btn btn-icon btn-sm" type="button" data-act="modal-close" aria-label="关闭">' +
-          icon('close') + '</button></div><div class="modal-body">' +
-      '<div class="hint-box">' + icon('info', 'ic-sm') + ' 一次输入可跨多个所选来源（X1-步骤3）；' +
+          icon('close') + '</button></div>' +
+      '<div class="modal-tabs" role="tablist">' + tabs + '</div><div class="modal-body">';
+
+    if (state.modalVariant === 'filter') {
+      h += '<div class="hint-box">' + icon('info', 'ic-sm') +
+        ' 设置本次检索的扫描范围；勾选「记住我的选择」后，过滤项会保留到下次打开。</div>' +
+        '<div class="filter-grid">' +
+          selectField('filter-limit', '扫描上限', fd.limitOptions, f.limit) +
+          selectField('filter-scope', '检索类型', fd.scopeOptions, f.scope) +
+          selectField('filter-region', '站点地区', fd.regionOptions, f.region) +
+        '</div>' +
+        '<label class="check" style="margin-top:14px"><input type="checkbox" data-field="remember-filters"' +
+          (state.rememberFilters ? ' checked' : '') + '>记住我的选择（过滤项）</label>' +
+        '<div class="tiny" style="margin-top:9px">当前组合：' +
+          esc(f.limit) + ' / ' + esc(f.scope) + ' / ' + esc(f.region) + '</div>';
+    } else {
+      h += '<div class="hint-box">' + icon('info', 'ic-sm') + ' 关闭来源会实时从总成本移除（X1-步骤3）；' +
         (m.cost.kind === 'dynamic'
-          ? '浮动成本 = 所选来源之和，勾选时实时更新。'
-          : '当前模块成本为' + esc(C.COST_LABELS[m.cost.kind]) + '，来源选择仅影响结果范围。') + '</div>' +
-      '<div class="section-title" style="margin-top:12px">数据源（可多选）</div><div class="source-list">';
-    D.sources.forEach(function (s) {
-      var checked = draft.indexOf(s.id) >= 0;
-      h += '<label class="source-item' + (checked ? ' checked' : '') + '">' +
-        '<input type="checkbox" data-field="src-toggle" data-src-id="' + esc(s.id) + '"' +
-          (checked ? ' checked' : '') + '>' +
-        '<span class="source-name">' + esc(s.name) +
-          (s.healthy ? '' : ' <span class="pill pill-warn">暂不可用</span>') + '</span>' +
-        '<span class="tiny">' + esc(s.category) + '</span>' +
-        '<span class="source-cost">' + s.cost + ' 点</span></label>';
-    });
-    h += '</div><div class="divider"></div>' +
-      '<div class="section-title">扫描范围 / 类型 / 地区</div><div class="filter-grid">' +
-      selectField('filter-limit', '限制条数', fd.limitOptions, f.limit) +
-      selectField('filter-scope', '扫描类型', fd.scopeOptions, f.scope) +
-      selectField('filter-region', '地区范围', fd.regionOptions, f.region) +
-      '</div></div>' +
+          ? '浮动成本 = 所选来源之和。'
+          : '当前模块为' + esc(C.COST_LABELS[m.cost.kind]) + '成本，来源选择仅影响结果范围。') + '</div>' +
+        '<div class="source-list">';
+      D.sources.forEach(function (s) {
+        var checked = draft.indexOf(s.id) >= 0;
+        h += '<label class="source-item' + (checked ? ' checked' : '') + '">' +
+          '<input type="checkbox" data-field="src-toggle" data-src-id="' + esc(s.id) + '"' +
+            (checked ? ' checked' : '') + '>' +
+          '<span class="source-name">' + esc(s.name) +
+            (s.healthy ? '' : ' <span class="pill pill-warn">暂不可用</span>') + '</span>' +
+          '<span class="tiny">' + esc(s.category) + '</span>' +
+          '<span class="source-cost">' + s.cost + ' 点</span></label>';
+      });
+      h += '</div><div class="source-total"><span>已选 ' + draft.length +
+        ' 个来源 · 单项成本之和</span><strong>' + c.perSearch + ' 点 / 条</strong></div>' +
+        '<label class="check" style="margin-top:12px"><input type="checkbox" data-field="remember-sources"' +
+          (state.rememberSources ? ' checked' : '') + '>记住我的选择（来源）</label>';
+    }
+    h += '</div>' +
       '<div class="modal-foot"><div><div class="tiny">总成本（含 ' + batchCount() + ' 条批量）</div>' +
         '<div class="cost-value">' + c.total + ' 点</div>' +
         '<div class="tiny">' + esc(costDetail(c, m)) + '</div></div>' +
-        '<div style="display:flex;gap:8px">' +
+        '<div class="modal-foot-btns">' +
+          '<button class="btn" type="button" data-act="modal-close">关闭</button>' +
           '<button class="btn" type="button" data-act="filter-reset">重置</button>' +
           '<button class="btn btn-primary" type="button" data-act="filter-apply">应用筛选</button>' +
         '</div></div></div></div>';
@@ -466,10 +717,11 @@
     render();
     if (gate !== 'pass') { return; }
 
+    startStreaming();   // F-09: 结果逐行流入（推断，见蓝图 §12）
     if (state.runTimer) { clearTimeout(state.runTimer); }
     state.runTimer = setTimeout(function () {
       state.runTimer = null;
-      var outcomes = ['success', 'noresults', 'partial', 'source-down', 'timeout', 'network'];
+      var outcomes = ['success', 'noresults', 'partial', 'source-down', 'timeout', 'network', 'no-connections'];
       finishQuery(outcomes.indexOf(state.scenario) >= 0 ? state.scenario : 'success');
     }, 900);
   }
@@ -477,14 +729,15 @@
   // 结果落地：状态机 RESOLVE + 结果组装 + 扣费记账 + 模式对历史的影响
   function finishQuery(outcome) {
     var t = currentType(), m = currentModule(), c = currentCost();
+    stopStreaming();
     state.result = C.reduceResult(state.result, {
       type: 'RESOLVE', payload: { outcome: outcome, meta: { cost: c.total } }
     });
     state.resultData = C.buildResults({
       seeds: D.resultSeeds, sources: D.sources,
       selectedSourceIds: m.cost.kind === 'dynamic' ? state.selectedSourceIds : m.sourceIds,
-      scenario: outcome === 'noresults' ? 'noresults' : outcome === 'partial' ? 'partial'
-        : outcome === 'source-down' ? 'source-down' : 'success',
+      scenario: ['noresults', 'partial', 'source-down', 'no-connections'].indexOf(outcome) >= 0
+        ? outcome : 'success',
       batchCount: batchCount()
     });
     state.page = 1;
@@ -525,10 +778,14 @@
       state.activeModuleId = node.getAttribute('data-module-id') || state.activeModuleId;
       var m = currentModule();
       state.modalModuleId = m.id;
-      state.draftSourceIds = (m.cost.kind === 'dynamic' ? state.selectedSourceIds : m.sourceIds).slice();
-      state.draftFilters = {
-        limit: state.filters.limit, scope: state.filters.scope, region: state.filters.region
-      };
+      // P03: 「记住我的选择」勾选时，下次打开恢复上次保存的草稿
+      state.draftSourceIds = (state.rememberSources && state.savedSourceIds)
+        ? state.savedSourceIds.slice()
+        : (m.cost.kind === 'dynamic' ? state.selectedSourceIds : m.sourceIds).slice();
+      state.draftFilters = (state.rememberFilters && state.savedFilters)
+        ? { limit: state.savedFilters.limit, scope: state.savedFilters.scope, region: state.savedFilters.region }
+        : { limit: state.filters.limit, scope: state.filters.scope, region: state.filters.region };
+      state.modalVariant = 'sources';
       state.modalOpen = true;
       render();
     },
@@ -550,9 +807,17 @@
       state.filters = {
         limit: state.draftFilters.limit, scope: state.draftFilters.scope, region: state.draftFilters.region
       };
+      state.savedSourceIds = state.rememberSources ? state.selectedSourceIds.slice() : null;
+      state.savedFilters = state.rememberFilters
+        ? { limit: state.filters.limit, scope: state.filters.scope, region: state.filters.region }
+        : null;
       state.modalOpen = false;
       render();
       showToast('已应用筛选，成本已重算（X2-④ 应用筛选）', true);
+    },
+    'modal-variant': function (node) {
+      state.modalVariant = node.getAttribute('data-variant') === 'sources' ? 'sources' : 'filter';
+      render();
     },
     'run': function () { runQuery(); },
     'batch-add': function () {
@@ -578,17 +843,20 @@
       render();
     },
     'cancel': function () {
+      stopStreaming();
       if (state.runTimer) { clearTimeout(state.runTimer); state.runTimer = null; }
       state.result = C.reduceResult(state.result, { type: 'CANCEL' });
       render();
       showToast('已取消查询，未扣减额度');
     },
     'retry': function () {
+      stopStreaming();
       state.result = C.initialResult();
       state.resultData = null;
       runQuery();
     },
     'edit': function () {
+      stopStreaming();
       state.result = C.initialResult();
       state.resultData = null;
       render();
@@ -628,7 +896,28 @@
     },
     'filter-limit': function (el) { state.draftFilters.limit = el.value; },
     'filter-scope': function (el) { state.draftFilters.scope = el.value; },
-    'filter-region': function (el) { state.draftFilters.region = el.value; }
+    'filter-region': function (el) { state.draftFilters.region = el.value; },
+    // 切片 4 新增字段
+    'composer-type': function (el) {
+      // P01/P04: 头部搜索类型下拉 —— 与左栏导航等价，切换时整组替换模块卡
+      state.activeTypeId = el.value;
+      var mods = modulesForType();
+      state.activeModuleId = mods.length ? mods[0].id : null;  // 每类固定默认最左卡
+      state.query = ''; state.batch = ['']; state.batchNotice = '';
+      state.result = C.initialResult(); state.resultData = null;
+      render();
+    },
+    'batch-on-head': function (el) {
+      state.batchOn = !!el.checked;
+      if (state.batchOn && !state.batch.length) { state.batch = ['']; }
+      state.batchNotice = '';
+      render();
+    },
+    'remember-filters': function (el) { state.rememberFilters = !!el.checked; },
+    'remember-sources': function (el) { state.rememberSources = !!el.checked; },
+    'reset-email': function (el) { state.resetEmail = el.value; },
+    'ask-text': function (el) { state.askText = el.value; },
+    'adv-case': function (el) { state.caseId = el.value; render(); }
   };
   /* ==== SLICE2:END ==== */
 
@@ -636,26 +925,22 @@
    * X2 全状态 + 结果表（列头/三计数/分页/来源筛选/书签/CSV/重试/故障提示）
    * + 额度页（充值/交易记录） + 留存页（Case/书签/历史） + 状态演练落地
    * ======================================================================== */
-  // 默认选中「多源并查」模块，便于开箱演示浮动成本与来源归因（X1-步骤3）
-  (function () {
-    var multi = D.modulesByType(state.activeTypeId).filter(function (m) {
-      return m.cost.kind === 'dynamic';
-    })[0];
-    if (multi) { state.activeModuleId = multi.id; }
-  })();
+  // P01: 每类固定默认「最左卡」（基础核验），不预设选中第三张卡；
+  // 需要浮动成本 / 多源列集时由用户点击第三张「多源并查」卡切换。
   // 演练态结果表使用的来源集合（全量，含一个故障源以复现 partial）
   state.tableSourceIds = D.sources.map(function (s) { return s.id; });
 
-  var TABLE_PHASES = ['success', 'partial', 'source-down', 'noresults', 'export-success'];
+  // F-03: 关联线索为空也是带数据表的状态（计数口径差异可复现）
+  var TABLE_PHASES = ['success', 'partial', 'source-down', 'noresults',
+    'export-success', 'no-connections'];
 
   // 需要表格的状态若无数据，即时构造合成演示数据（不扣费、不写历史）
   function ensureResultData() {
     if (TABLE_PHASES.indexOf(state.result.phase) < 0) { return null; }
     if (state.resultData) { return state.resultData; }
     var p = state.result.phase;
-    var scenario = p === 'partial' ? 'partial'
-      : p === 'source-down' ? 'source-down'
-      : p === 'noresults' ? 'noresults' : 'success';
+    var scenario = ['partial', 'source-down', 'noresults', 'no-connections'].indexOf(p) >= 0
+      ? p : 'success';
     state.resultData = C.buildResults({
       seeds: D.resultSeeds, sources: D.sources,
       selectedSourceIds: state.tableSourceIds,
@@ -672,7 +957,7 @@
 
   function renderCountTrio(data) {
     var c = data.counts;
-    return '<div class="count-trio">' +
+    var out = '<div class="count-trio">' +
       '<div class="count-box c-found"><div class="count-num">' + c.found +
         '</div><div class="count-label">' + esc(C.COUNT_LABELS.found) + '</div></div>' +
       '<div class="count-box c-enriched"><div class="count-num">' + c.enriched +
@@ -680,6 +965,90 @@
       '<div class="count-box c-connection"><div class="count-num">' + c.connection +
         '</div><div class="count-label">' + esc(C.COUNT_LABELS.connection) + '</div></div>' +
       '</div>';
+    // F-03: 计数器与详情区口径差异，不是错误
+    if (data.counterMismatch) {
+      out += '<div class="mismatch-note">' + icon('info', 'ic-sm') +
+        esc(data.counterMismatchNote) + '</div>';
+    }
+    return out;
+  }
+
+  // P05: 结果 / 书签 双 tab
+  function renderResultTabsBar() {
+    return '<div class="result-tabs" role="tablist">' +
+      D.resultTabs.map(function (x) {
+        return '<button type="button" class="result-tab' + (state.resultTab === x.id ? ' active' : '') +
+          '" data-act="result-tab" data-tab="' + esc(x.id) + '">' + esc(x.label) +
+          (x.id === 'bookmarks' ? ' <span class="tab-count">' + state.bookmarks.length + '</span>' : '') +
+          '</button>';
+      }).join('') + '</div>';
+  }
+
+  // P08: 详情 / 档案视图 / 关系图 三个详情 tab 及占位内容
+  function renderDetailPane(rows) {
+    var tabs = '<div class="detail-tabs" role="tablist">' +
+      D.detailTabs.map(function (x) {
+        return '<button type="button" class="detail-tab' + (state.detailTab === x.id ? ' active' : '') +
+          '" data-act="detail-tab" data-tab="' + esc(x.id) + '">' + esc(x.label) + '</button>';
+      }).join('') + '</div>';
+    var body = '';
+    if (state.detailTab === 'profile') {
+      var r = rows[0];
+      body = '<div class="detail-pane"><div class="profile-grid">' +
+        '<div><span class="tiny">线索标识</span><div class="strong">' + esc(r ? r.identifier : '—') + '</div></div>' +
+        '<div><span class="tiny">来源</span><div class="strong">' + esc(r ? r.sourceName : '—') + '</div></div>' +
+        '<div><span class="tiny">状态</span><div class="strong">' + esc(r ? r.status : '—') + '</div></div>' +
+        '<div><span class="tiny">置信度</span><div class="strong">' + (r ? r.confidence : '—') + '%</div></div>' +
+        '</div><div class="tiny" style="margin-top:9px">档案视图为占位面板，字段与取值均为合成数据。</div></div>';
+    } else if (state.detailTab === 'graph') {
+      var nodes = C.streamSlice(rows, 5).map(function (r, i) {
+        return '<div class="graph-node' + (i === 0 ? ' root' : '') + '">' + esc(r.identifier) + '</div>';
+      }).join('<span class="graph-edge"></span>');
+      body = '<div class="detail-pane"><div class="graph-row">' + (nodes || '<span class="tiny">暂无数据</span>') +
+        '</div><div class="tiny" style="margin-top:9px">关系图为占位示意，用纯 CSS 节点绘制，不引用任何外部图形库。</div></div>';
+    } else {
+      var list = C.streamSlice(rows, 4).map(function (r) {
+        return '<li><span class="strong">' + esc(r.identifier) + '</span> · ' +
+          esc(r.status) + ' · ' + esc(r.sourceName) + '　<span class="tiny">' + esc(r.note) + '</span></li>';
+      }).join('');
+      body = '<div class="detail-pane"><ul class="reason-list" style="color:var(--slate-700)">' +
+        (list || '<li class="tiny">暂无结果明细</li>') + '</ul></div>';
+    }
+    return tabs + body;
+  }
+
+  // F-09: 加载态结果逐行流入（基于旧版 Wiki 文字的推断，未经目标页验证）
+  function renderStreaming() {
+    var all = C.buildResults({ seeds: D.resultSeeds, sources: D.sources,
+      selectedSourceIds: state.tableSourceIds, scenario: 'success', batchCount: 1 });
+    var shown = C.streamSlice(all.rows, state.streamCount);
+    var rows = shown.map(function (r) {
+      return '<div class="stream-row"><span class="stream-dot"></span>' +
+        '<span class="cell-id">' + esc(r.identifier) + '</span>' +
+        '<span class="tiny">' + esc(r.sourceName) + '</span>' +
+        '<span class="tag tag-ok">' + esc(r.status) + '</span></div>';
+    }).join('');
+    return '<div class="panel-body stream-panel" style="border-top:1px solid var(--slate-200)">' +
+      '<div class="tiny" style="margin-bottom:9px">结果异步逐步填充（基于旧版 Wiki 的推断，未经目标页验证）' +
+      '　·　已流入 ' + shown.length + ' 行</div>' +
+      '<div class="skeleton"><div class="sk-line w90"></div><div class="sk-line w70"></div></div>' +
+      '<div class="progress"><i></i></div>' + (rows || '<div class="empty-mini">等待首批结果…</div>') +
+      '</div>';
+  }
+
+  // P05: 「书签」tab 内容
+  function renderBookmarksTab() {
+    if (!state.bookmarks.length) {
+      return '<div class="empty-mini">还没有书签。切回「结果」tab，点表格里的书签图标即可保存线索。</div>';
+    }
+    return '<div class="table-scroll"><table class="grid"><thead><tr>' +
+      '<th>标识</th><th>来源</th><th>保存时间</th><th>操作</th></tr></thead><tbody>' +
+      state.bookmarks.map(function (b) {
+        return '<tr><td class="cell-id">' + esc(b.identifier) + '</td><td>' + esc(b.sourceName) +
+          '</td><td class="nowrap">' + esc(b.savedAt) + '</td><td>' +
+          '<button class="btn btn-sm" type="button" data-act="bookmark-remove" data-id="' +
+          esc(b.id) + '">移除</button></td></tr>';
+      }).join('') + '</tbody></table></div>';
   }
 
   function renderPagination(pg) {
@@ -696,8 +1065,40 @@
     return h;
   }
 
+  // E.2 / H-4: 两套结果列集按模块切换，表头带排序箭头。
+  // 实现偏差（已在蓝图 §12 写明）：为让占位线索可识别、可加书签、可发起新查询，
+  // 两套列集之前统一加一个自造的公共「线索标识」列、之后加一个自造「操作」列；
+  // 列集本身仍严格按 single / multi 两套切换，不声称与原站列数一致。
+  var CELL_KEYS = {
+    site: 'sourceName', platform: 'sourceName', source: 'sourceName',
+    enriched: 'category', connection: 'category', profile: 'identifier'
+  };
+  function sortKeyFor(headerKey) { return CELL_KEYS[headerKey] || ''; }
+  function renderCell(hk, r) {
+    if (hk === 'bookmark') {
+      return '<button class="btn btn-sm btn-icon" type="button" data-act="bookmark" data-identifier="' +
+        esc(r.identifier) + '" data-source="' + esc(r.sourceName) + '" title="加入书签">' +
+        icon('bookmark', 'ic-sm') + '</button>';
+    }
+    if (hk === 'enriched') {
+      return r.category === 'enriched' ? '<span class="tag tag-info">已补充</span>' : '<span class="tiny">—</span>';
+    }
+    if (hk === 'connection') {
+      return r.category === 'connection' ? '<span class="tag tag-warn">有关联</span>' : '<span class="tiny">—</span>';
+    }
+    if (hk === 'profile') {
+      return '<button class="link-btn" type="button" data-act="detail-tab" data-tab="profile">查看档案</button>';
+    }
+    if (hk === 'site' || hk === 'platform') { return esc(r.sourceName); }
+    if (hk === 'source') { return '<span class="pill">' + esc(r.sourceName) + '</span>'; }
+    return esc(r[hk] || '—');
+  }
+
   function renderResultTable(data) {
+    var set = D.columnSets[C.columnSetFor(currentModule())];
     var scoped = C.filterBySource(data.rows, state.sourceFilter);
+    scoped = C.filterByEntity(scoped, state.entityTab);   // P01/P03 实体页签筛选
+    if (state.sortKey) { scoped = C.sortRows(scoped, state.sortKey, state.sortDir); }
     var pg = C.paginate(scoped, state.page, state.pageSize);
     var h = '<div class="result-tools">' +
       '<select class="select topbar-select" data-field="source-filter" aria-label="按来源筛选">' +
@@ -706,11 +1107,19 @@
           return '<option value="' + esc(s.id) + '"' +
             (state.sourceFilter === s.id ? ' selected' : '') + '>' + esc(s.name) + '</option>';
         }).join('') + '</select>' +
+      '<span class="pill">' + esc(set.label) + '（按模块切换）</span>' +
       '<span class="spacer"></span>' +
-      '<button class="btn btn-sm" type="button" data-act="export">' +
-        icon('download', 'ic-sm') + '导出 CSV</button>' +
-      '<button class="btn btn-sm" type="button" data-act="retry">' +
-        icon('retry', 'ic-sm') + '重试</button></div>';
+      // P05/P07: 结果子头动作按钮（自造中文名）
+      '<button class="btn btn-sm" type="button" data-act="ai-analyse">' + icon('spark', 'ic-sm') + '智能分析</button>' +
+      '<button class="btn btn-sm" type="button" data-act="ask">' + icon('chat', 'ic-sm') + '追问</button>' +
+      '<button class="btn btn-sm" type="button" data-act="export">' + icon('download', 'ic-sm') + '导出</button>' +
+      '<button class="btn btn-sm" type="button" data-act="clear-result">' + icon('close', 'ic-sm') + '清空</button>' +
+      '<button class="btn btn-sm" type="button" data-act="retry">' + icon('retry', 'ic-sm') + '重试</button></div>';
+    if (state.askOpen) {
+      h += '<div class="ask-row"><input class="input" type="text" data-field="ask-text" ' +
+        'placeholder="输入要追问的问题（演示占位）" value="' + esc(state.askText) + '">' +
+        '<button class="btn btn-sm btn-primary" type="button" data-act="ask-submit">提交追问</button></div>';
+    }
     h += renderCountTrio(data);
     // X2-数据源故障: 健康来源结果仍出，故障来源单独提示
     if (data.sourcesDown.length) {
@@ -718,42 +1127,49 @@
         esc(data.sourcesDown.map(function (s) { return s.name; }).join('、')) +
         '；其余健康来源的结果已正常展示。</div>';
     }
+    // P08: 详情 / 档案视图 / 关系图 三个详情 tab
+    h += renderDetailPane(pg.rows.length ? pg.rows : data.rows);
     if (!pg.rows.length) {
-      return h + '<div class="empty-mini">当前来源筛选下没有结果行。可切换来源，或使用上方状态卡的出口继续。</div>';
+      return h + '<div class="empty-mini">当前筛选下没有结果行。可切换来源 / 实体页签，或使用上方状态卡出口。</div>';
     }
-    h += '<div class="table-scroll"><table class="grid"><thead><tr>' +
-      '<th>标识</th><th>来源</th><th>状态</th><th>置信度</th><th>操作</th>' +
-      '</tr></thead><tbody>';
+    h += '<div class="table-scroll"><table class="grid"><thead><tr><th>线索标识</th>';
+    set.headers.forEach(function (hd) {
+      var sk = sortKeyFor(hd.key);
+      if (!sk) { h += '<th>' + esc(hd.label) + '</th>'; return; }
+      var arrow = state.sortKey === sk ? (state.sortDir === 'asc' ? '▲' : '▼') : '↕';
+      h += '<th><button class="th-sort" type="button" data-act="sort" data-key="' + sk + '" ' +
+        'title="按此列排序">' + esc(hd.label) + '<span class="sort-arrow"> ' + arrow + '</span></button></th>';
+    });
+    h += '<th>操作</th></tr></thead><tbody>';
     pg.rows.forEach(function (r) {
-      h += '<tr><td class="cell-id">' + esc(r.identifier) + '</td>' +
-        '<td>' + esc(r.sourceName) + '</td>' +
-        '<td>' + categoryTag(r) + '</td>' +
-        '<td class="cell-conf">' + r.confidence + '%</td>' +
-        '<td><div class="row-acts">' +
-          '<button class="btn btn-sm btn-icon" type="button" data-act="bookmark" data-identifier="' +
-            esc(r.identifier) + '" data-source="' + esc(r.sourceName) + '" title="加入书签">' +
-            icon('bookmark', 'ic-sm') + '</button>' +
-          '<button class="btn btn-sm btn-icon" type="button" data-act="requery" data-identifier="' +
-            esc(r.identifier) + '" title="以该线索发起新查询">' + icon('search', 'ic-sm') + '</button>' +
-        '</div></td></tr>';
+      h += '<tr><td class="cell-id">' + esc(r.identifier) + '</td>';
+      set.headers.forEach(function (hd) { h += '<td>' + renderCell(hd.key, r) + '</td>'; });
+      h += '<td><button class="btn btn-sm btn-icon" type="button" data-act="requery" data-identifier="' +
+        esc(r.identifier) + '" title="以该线索发起新查询">' + icon('search', 'ic-sm') + '</button></td></tr>';
     });
     return h + '</tbody></table></div>' + renderPagination(pg);
   }
 
-  // X2 全状态: 状态卡（每个状态有明确文案与出口）+ 结果表
+  // X2 全状态: 状态卡（每个状态有明确文案与出口）+ 结果双 tab / 两套列集 / 详情 tab
   function renderResult() {
     var data = ensureResultData();
     var meta = C.PHASES[state.result.phase] || C.PHASES.idle;
-    var h = '<section class="panel"><div class="panel-head"><h2 class="h3">⑤ 检索结果</h2>' +
+    var h = '<section class="panel wb-result"><div class="panel-head"><h2 class="h3">⑤ 检索结果</h2>' +
       '<span class="pill">' + esc(meta.badge) + '</span></div>' + renderStateCard(state.result);
     if (state.result.phase === 'export-success' && state.result.meta.exportCount !== undefined) {
       h += '<div class="panel-body" style="padding-top:0"><div class="hint-box">' +
         icon('check', 'ic-sm') + ' 本次导出 ' + state.result.meta.exportCount +
         ' 条记录；文件内容为合成占位数据。</div></div>';
     }
+    // F-09: 加载态逐行流入（推断）
+    if (state.result.phase === 'loading') { h += renderStreaming(); }
     if (data) {
       h += '<div class="panel-body" style="border-top:1px solid var(--slate-200)">' +
-        renderResultTable(data) + '</div>';
+        (state.analysis ? '<div class="hint-box" style="margin-bottom:10px">' +
+          icon('spark', 'ic-sm') + ' ' + esc(state.analysis) + '</div>' : '') +
+        renderResultTabsBar() +
+        (state.resultTab === 'bookmarks' ? renderBookmarksTab() : renderResultTable(data)) +
+        '</div>';
     }
     return h + '</section>';
   }
@@ -817,7 +1233,7 @@
   // 留存页（X1-Cases / 书签 / 模式对历史的影响）
   // ---------------------------------------------------------------------------
   function renderCasesView() {
-    var cases = D.cases.map(function (cs) {
+    var cases = state.cases.map(function (cs) {
       var active = cs.id === state.caseId;
       return '<button class="case-item' + (active ? ' active' : '') + '" type="button" ' +
         'data-act="case-pick" data-case-id="' + esc(cs.id) + '">' +
@@ -892,6 +1308,7 @@
       state.page = 1;
       state.result = C.reduceResult(state.result, { type: 'FORCE', payload: { phase: 'loading' } });
       render();
+      startStreaming();   // F-09: 重试同样逐行流入
       if (state.runTimer) { clearTimeout(state.runTimer); }
       state.runTimer = setTimeout(function () {
         state.runTimer = null;
@@ -1047,10 +1464,13 @@
     // X2: 状态演练一键切到指定 phase（?state= 与下拉共用）
     'demo-state': function (el) {
       var v = el.value;
+      stopStreaming();
       state.scenario = v;
       state.resultData = null;
       state.page = 1;
       state.sourceFilter = 'all';
+      state.resultTab = 'results';
+      state.analysis = '';
       var meta = v === 'invalid' ? {
         reasons: [
           '示例：输入为空或仅含空白字符',
@@ -1062,6 +1482,7 @@
         type: 'FORCE', payload: { phase: v, meta: meta }
       });
       render();
+      if (v === 'loading') { startStreaming(); }   // F-09: 演练态同样逐行流入
     },
     'source-filter': function (el) {
       state.sourceFilter = el.value;
@@ -1083,10 +1504,160 @@
   };
   /* ==== SLICE3:END ==== */
 
+  /* ==== SLICE4:BEGIN ==== *
+   * 切片 4 · 证据包新增 UI 规格（P01/P03/P04/P05/P07/P08/P14/E01/E04/E12/G-03/F-03/F-09）
+   * 全部为本地演示交互，无外部请求；命名与文案自造。
+   * ======================================================================== */
+  var S4_ACTIONS = {
+    // G-03/E12: 主题切换并持久化（仅主题偏好，不含任何凭证）
+    'theme-toggle': function () {
+      state.theme = state.theme === 'dark' ? 'light' : 'dark';
+      persistTheme(state.theme);
+      render();
+      showToast('已切换为' + (state.theme === 'dark' ? '深色' : '浅色') + '主题（偏好已本地保存）', true);
+    },
+    // P07/P14: 视图分段
+    'view': function (node) {
+      state.view = node.getAttribute('data-view') || 'basic';
+      state.overflowOpen = false;
+      render();
+      showToast('已切换到「' + (D.views.filter(function (v) { return v.id === state.view; })[0] || D.views[0]).label + '」');
+    },
+    'agent-enter': function () {
+      showToast('智能体视图为纯前端占位，暂不提供真实自动化服务。');
+    },
+    // E01/E12: 登录页页头/页脚自造入口（演示说明，不跳转外部）
+    'signin-info': function (node) {
+      showToast('「' + (node.getAttribute('data-topic') || '该入口') + '」为演示占位入口，不连接任何外部页面。');
+    },
+    // E04: 忘记密码 → #/reset
+    'forgot': function () {
+      state.route = 'reset'; state.resetSent = false;
+      location.hash = '#/reset';
+      render();
+    },
+    'reset-send': function () {
+      var v = String(state.resetEmail || '').replace(/^\s+|\s+$/g, '');
+      if (!v || v.indexOf('@') < 0) { showToast('请填写一个有效的演示邮箱地址。'); return; }
+      state.resetSent = true;
+      render();
+      showToast(D.resetCopy.codeSent, true);
+    },
+    'reset-back': function () {
+      state.route = 'signin'; state.resetSent = false;
+      location.hash = '#/signin';
+      render();
+    },
+    // P01/P03: 实体类型页签 + 右侧过滤齿轮
+    'entity': function (node) {
+      state.entityTab = node.getAttribute('data-entity') || 'all';
+      state.page = 1;
+      render();
+    },
+    'entity-gear': function () {
+      state.modalVariant = 'filter';
+      state.draftFilters = {
+        limit: state.filters.limit, scope: state.filters.scope, region: state.filters.region
+      };
+      state.draftSourceIds = state.selectedSourceIds.slice();
+      state.modalOpen = true;
+      render();
+    },
+    'module-info': function (node) {
+      var id = node.getAttribute('data-module-id');
+      var m = modulesForType().filter(function (x) { return x.id === id; })[0];
+      showToast(m ? (m.name + '：' + m.inputHint) : '模块说明暂不可用');
+    },
+    // P04: 构成区头部溢出菜单
+    'overflow': function () { state.overflowOpen = !state.overflowOpen; render(); },
+    'overflow-config': function () {
+      state.overflowOpen = false;
+      state.modalVariant = 'sources';
+      state.draftSourceIds = state.selectedSourceIds.slice();
+      state.draftFilters = {
+        limit: state.filters.limit, scope: state.filters.scope, region: state.filters.region
+      };
+      state.modalOpen = true;
+      render();
+    },
+    'overflow-reset': function () {
+      stopStreaming();
+      state.overflowOpen = false;
+      state.query = ''; state.batchOn = false; state.batch = ['']; state.batchNotice = '';
+      state.entityTab = 'all'; state.sortKey = ''; state.sortDir = 'asc';
+      state.result = C.initialResult(); state.resultData = null; state.analysis = '';
+      render();
+      showToast('构成区已重置为初始状态', true);
+    },
+    'overflow-help': function () {
+      state.overflowOpen = false;
+      render();
+      showToast('五步流程：①选类型 → ②选模块 → ③配置来源/过滤 → ④输入并看成本 → ⑤查看结果与线索');
+    },
+    // P05: 结果 / 书签 双 tab
+    'result-tab': function (node) {
+      state.resultTab = node.getAttribute('data-tab') === 'bookmarks' ? 'bookmarks' : 'results';
+      render();
+    },
+    // P08: 详情 / 档案视图 / 关系图
+    'detail-tab': function (node) {
+      state.detailTab = node.getAttribute('data-tab') || 'detail';
+      render();
+    },
+    // E.2: 表头排序箭头
+    'sort': function (node) {
+      var k = node.getAttribute('data-key');
+      if (C.SORT_KEYS.indexOf(k) < 0) { return; }
+      if (state.sortKey === k) { state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc'; }
+      else { state.sortKey = k; state.sortDir = 'asc'; }
+      state.page = 1;
+      render();
+    },
+    // P05/P07: 智能分析 / 追问 / 清空
+    'ai-analyse': function () {
+      var data = ensureResultData();
+      if (!data) { showToast('当前状态没有可分析的结果。'); return; }
+      state.analysis = '合成分析：本批共 ' + data.total + ' 条线索（直接命中 ' + data.counts.found +
+        '、补充命中 ' + data.counts.enriched + '、关联线索 ' + data.counts.connection +
+        '）；建议优先复核置信度 ≥ 80 的条目。此结论为占位文本，不含真实模型推理。';
+      render();
+      showToast('已生成占位分析结论', true);
+    },
+    'ask': function () { state.askOpen = !state.askOpen; render(); },
+    'ask-submit': function () {
+      var q = String(state.askText || '').replace(/^\s+|\s+$/g, '');
+      if (!q) { showToast('请先输入要追问的问题。'); return; }
+      state.askOpen = false; state.askText = '';
+      render();
+      showToast('已记录追问（演示占位，无外部调用）：' + q, true);
+    },
+    'clear-result': function () {
+      stopStreaming();
+      state.result = C.initialResult(); state.resultData = null;
+      state.page = 1; state.sourceFilter = 'all'; state.sortKey = ''; state.sortDir = 'asc';
+      state.analysis = ''; state.askOpen = false;
+      render();
+      showToast('结果已清空，可修改条件后重新查询');
+    },
+    // P07/P14: 高级视图 Case 面板「新建」
+    'case-create': function () {
+      var n = state.cases.length + 1;
+      var cs = { id: 'case-' + Date.now(), name: '新建留存 ' + n, color: '#4f46e5' };
+      state.cases = state.cases.concat([cs]);
+      state.caseId = cs.id;
+      render();
+      showToast('已新建本地演示 Case：' + cs.name, true);
+    }
+  };
+  /* ==== SLICE4:END ==== */
+
   // ---------------------------------------------------------------------------
   // 主渲染
   // ---------------------------------------------------------------------------
   function render() {
+    applyTheme();   // G-03: 每次渲染同步 data-theme（含 file:// 首次加载）
+    // E04: 重置密码页独立于演示会话，任何状态都可访问
+    if (state.route === 'reset') { app.innerHTML = renderReset(); return; }
     if (!state.signedIn || state.route === 'signin') {
       app.innerHTML = renderSignin();
       return;
@@ -1098,6 +1669,7 @@
       '<div class="shell">' +
         renderTopbar() +
         renderSubnav() +
+        (state.route === 'search' ? renderViewBar() : '') +
         (state.route === 'search' ? renderDemoBar() : '') +
         '<main class="view' + (state.route === 'search' ? '' : ' view-narrow') + '">' + body + '</main>' +
         renderFooter() +
@@ -1164,14 +1736,17 @@
       render();
     },
     'demo-reset': function () {
+      stopStreaming();
       state.scenario = 'success';
       state.result = C.initialResult();
       state.resultData = null;
+      state.analysis = '';
       render();
     }
   };
   Object.assign(actions, S2_ACTIONS);      // 切片 2 动作（X1 五步 / 成本 / 批量 / 过滤器）
   Object.assign(actions, S3_ACTIONS);      // 切片 3 动作（X2 全状态出口 / 结果表 / 额度 / 留存）
+  Object.assign(actions, S4_ACTIONS);      // 切片 4 动作（新增 UI 规格 / 主题 / 视图 / 重置页）
 
   // ---------------------------------------------------------------------------
   // 字段处理表（input / change 事件；S2/S3 追加）
@@ -1202,7 +1777,9 @@
   function onClick(e) {
     var node = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
     if (!node) {
-      if (state.menuOpen) { state.menuOpen = false; render(); }
+      if (state.menuOpen || state.overflowOpen) {
+        state.menuOpen = false; state.overflowOpen = false; render();
+      }
       return;
     }
     var act = node.getAttribute('data-act');
@@ -1222,7 +1799,8 @@
   function onHashChange() {
     var r = routeFromHash();
     if (!r) { return; }
-    if (!state.signedIn && r !== 'signin') {
+    // E04: 重置密码页与登录页一样，不要求演示会话
+    if (!state.signedIn && r !== 'signin' && r !== 'reset') {
       location.hash = '#/signin';
       state.route = 'signin';
       render();
@@ -1241,6 +1819,26 @@
     var st = qs.get('state');
     var hashRoute = routeFromHash();
 
+    // 验证脚手架（与 ?state= 同族）：?theme=dark|light、?view=basic|advanced|agent
+    var themeParam = qs.get('theme');
+    if (themeParam === 'dark' || themeParam === 'light') {
+      state.theme = themeParam; persistTheme(themeParam);
+    }
+    var viewParam = qs.get('view');
+    if (viewParam === 'basic' || viewParam === 'advanced' || viewParam === 'agent') {
+      state.view = viewParam;
+    }
+    // ?modal=filter|sources 直接打开配置弹窗的指定变体（无需点击，便于无头复现）
+    var modalParam = qs.get('modal');
+    if (modalParam === 'filter' || modalParam === 'sources') {
+      state.modalVariant = modalParam;
+      state.draftSourceIds = state.selectedSourceIds.slice();
+      state.draftFilters = {
+        limit: state.filters.limit, scope: state.filters.scope, region: state.filters.region
+      };
+      state.modalOpen = true;
+    }
+
     if (st && C.PHASES[st]) {
       // 带状态参数打开时自动进入演示会话，便于独立验证员一键复现（纯前端开关）
       state.signedIn = true;
@@ -1250,17 +1848,24 @@
       state.result = C.reduceResult(state.result, { type: 'FORCE', payload: { phase: st } });
     } else {
       state.route = hashRoute || 'signin';
-      state.signedIn = state.route !== 'signin' ? false : false;
-      if (state.route !== 'signin') {
-        state.signedIn = false;
+      // 未登录时只有 signin / reset 可达；其余 hash 回落到登录页
+      state.signedIn = false;
+      if (state.route !== 'signin' && state.route !== 'reset') {
+        state.route = 'signin';
       }
     }
 
     app.addEventListener('click', onClick);
     app.addEventListener('input', onInput);
     app.addEventListener('change', onChange);
+    // 表单内按 Enter 时拦截默认提交（file:// 下不能让页面跳转 / 重载）
+    app.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (state.route === 'signin' && actions['signin-submit']) { actions['signin-submit'](); }
+    });
     window.addEventListener('hashchange', onHashChange);
     render();
+    if (state.result.phase === 'loading' && state.route === 'search') { startStreaming(); }
   }
 
   boot();

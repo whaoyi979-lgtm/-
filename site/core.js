@@ -155,11 +155,28 @@
       key: 'export-success', title: '记录已导出', badge: '导出成功', tone: 'ok',
       desc: 'CSV 文件已生成。可继续复核结果，或返回工作台修改条件。',
       actions: [ { label: '继续复核', act: 'edit' } ], guidance: []
+    },
+    // F-03: 「关联线索为空」是独立状态；文档指出计数器可能与详情区矛盾，
+    // 这里显式标注为「数据口径差异而非错误」，并提供可操作出口。
+    'no-connections': {
+      key: 'no-connections', title: '关联线索为空，但已找到直接线索', badge: '关联为空', tone: 'info',
+      desc: '本次检索已得到直接命中与补充命中，但关联线索计数为 0。详情区与计数器可能出现口径不一致，这是统计范围差异，不是系统错误。',
+      actions: [
+        { label: '扩大来源', act: 'widen-sources' },
+        { label: '重试', act: 'retry' },
+        { label: '换搜索类型', act: 'switch-type' },
+        { label: '返回修改', act: 'edit' }
+      ],
+      guidance: [
+        '这是数据口径差异：关联线索按另一套聚合范围统计，故计数为 0 而详情区仍可能列出相关条目',
+        '若需要关联线索，可换用「多源并查」并勾选更多来源后重新查询',
+        '此为正常结果，不代表来源故障或查询失败'
+      ]
     }
   };
   var PHASE_KEYS = Object.keys(PHASES);
-  // RETRY 合法的终态集合
-  var TERMINAL = ['success', 'noresults', 'partial', 'source-down', 'timeout', 'network'];
+  // RETRY 合法的终态集合（F-03 的关联为空也允许重试）
+  var TERMINAL = ['success', 'noresults', 'partial', 'source-down', 'timeout', 'network', 'no-connections'];
 
   function initialResult() {
     return { phase: 'idle', message: PHASES.idle.title, meta: {} };
@@ -378,7 +395,8 @@
             category: seed.category,
             status: seed.status,
             confidence: seed.confidence,
-            note: seed.note
+            note: seed.note,
+            entity: seed.entity || 'url'   // P01/P03: 实体页签的占位分类
           });
         });
       }
@@ -387,9 +405,17 @@
     rows.forEach(function (r) {
       if (Object.prototype.hasOwnProperty.call(counts, r.category)) { counts[r.category] += 1; }
     });
+    // F-03: 计数器按独立聚合口径统计，关联线索可为 0 而详情区仍列出相关条目。
+    // 这是口径差异而非错误，显式返回标记供 UI 说明与自测断言。
+    var counterMismatch = scenario === 'no-connections';
+    if (counterMismatch) { counts.connection = 0; }
     return {
       rows: rows,
       counts: counts,
+      counterMismatch: counterMismatch,
+      counterMismatchNote: counterMismatch
+        ? '关联线索计数按独立聚合口径统计，与下方详情区条数可能不一致；这是数据口径差异，不是错误。'
+        : '',
       sourcesDown: down.map(function (s) { return { id: s.id, name: s.name }; }),
       total: rows.length,
       activeSourceIds: active.map(function (s) { return s.id; }),
@@ -498,6 +524,48 @@
   }
 
   // ==========================================================================
+  // C10 切片 4 · 新增 UI 规格的纯逻辑（E.2 / P01 / P03 / F-09）
+  //   - 两套列集按模块切换（H-4: 不声称唯一列集、不声称与原站列数一致）
+  //   - 实体页签筛选、表头排序、加载态逐行流入（均为确定性纯函数，可 Node 断言）
+  // ==========================================================================
+  // 单源模块 -> single 列集；多源模块 -> multi 列集。
+  function columnSetFor(module) {
+    var m = module || {};
+    var multi = (m.cost && m.cost.kind === 'dynamic') ||
+      (isArr(m.sourceIds) && m.sourceIds.length > 1);
+    return multi ? 'multi' : 'single';
+  }
+  // P01/P03: 实体页签按占位分类过滤；'all' 返回副本
+  function filterByEntity(rows, tab) {
+    var arr = isArr(rows) ? rows : [];
+    if (!tab || tab === 'all') { return arr.slice(); }
+    return arr.filter(function (r) { return (r.entity || 'url') === tab; });
+  }
+  var SORT_KEYS = ['identifier', 'sourceName', 'status', 'confidence', 'entity'];
+  // 表头排序箭头：默认升序；非法 key 原样返回；始终返回新数组（不可变）
+  function sortRows(rows, key, dir) {
+    var arr = isArr(rows) ? rows.slice() : [];
+    if (SORT_KEYS.indexOf(key) < 0) { return arr; }
+    var sign = dir === 'desc' ? -1 : 1;
+    return arr.sort(function (a, b) {
+      var x = a[key], y = b[key];
+      if (typeof x === 'number' && typeof y === 'number') { return (x - y) * sign; }
+      x = String(x === null || x === undefined ? '' : x);
+      y = String(y === null || y === undefined ? '' : y);
+      if (x === y) { return 0; }
+      return (x < y ? -1 : 1) * sign;
+    });
+  }
+  // F-09: 结果异步逐步填充 —— 取前 n 行，n 被钳制到 [0, rows.length]
+  function streamSlice(rows, n) {
+    var arr = isArr(rows) ? rows : [];
+    var k = Math.floor(Number(n));
+    if (!isFinite(k) || k < 0) { k = 0; }
+    if (k > arr.length) { k = arr.length; }
+    return arr.slice(0, k);
+  }
+
+  // ==========================================================================
   // 汇总导出
   // ==========================================================================
   return {
@@ -522,6 +590,9 @@
     CSV_HEADERS: CSV_HEADERS, toCSV: toCSV, csvCell: csvCell,
     // C9
     MODES: MODES, applyMode: applyMode, makeHistoryEntry: makeHistoryEntry,
+    // C10（切片 4 新增 UI 规格纯逻辑）
+    SORT_KEYS: SORT_KEYS, columnSetFor: columnSetFor, filterByEntity: filterByEntity,
+    sortRows: sortRows, streamSlice: streamSlice,
     // 工具
     findSource: findSource
   };

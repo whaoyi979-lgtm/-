@@ -59,7 +59,8 @@ t('data.js 导出为对象且含 18 类 / 模块 / 来源 / 结果种子', () =>
   assert.ok(Data.resultSeeds.length >= 10);
 });
 t('状态机每个 phase 都有明确文案与可操作出口（X2 全状态）', () => {
-  assert.equal(Core.PHASE_KEYS.length, 13);
+  // 切片 4 新增 F-03「关联线索为空」-> 14 个 phase
+  assert.equal(Core.PHASE_KEYS.length, 14);
   Core.PHASE_KEYS.forEach((k) => {
     const p = Core.PHASES[k];
     assert.ok(p.title && p.title.length > 0, k + ' 缺标题');
@@ -202,7 +203,7 @@ t('loading --CANCEL--> idle；终态 --RETRY--> loading；非法迁移原样返�
   assert.strictEqual(Core.reduceResult(s, { type: 'RESOLVE', payload: { outcome: 'success' } }), s);
   assert.strictEqual(Core.reduceResult(s, { type: 'RETRY' }), s);
 });
-t('FORCE 可切到全部 13 个 phase；SESSION_EXPIRED / SIGNIN 闭环', () => {
+t('FORCE 可切到全部 14 个 phase；SESSION_EXPIRED / SIGNIN 闭环', () => {
   Core.PHASE_KEYS.forEach((k) => {
     assert.equal(Core.reduceResult(Core.initialResult(),
       { type: 'FORCE', payload: { phase: k } }).phase, k);
@@ -213,7 +214,8 @@ t('FORCE 可切到全部 13 个 phase；SESSION_EXPIRED / SIGNIN 闭环', () => 
 });
 t('X2 要求的每个状态都有明确文案 + 至少一个可操作出口', () => {
   const required = ['idle', 'loading', 'success', 'noresults', 'partial', 'source-down',
-    'invalid', 'credits', 'bulk-limit', 'timeout', 'network', 'session-expired', 'export-success'];
+    'invalid', 'credits', 'bulk-limit', 'timeout', 'network', 'session-expired',
+    'export-success', 'no-connections'];
   required.forEach((k) => {
     const p = Core.PHASES[k];
     assert.ok(p, k + ' 缺失');
@@ -322,7 +324,7 @@ t('演练下拉覆盖 X2 要求的全部状态值', () => {
   const vals = Data.stateDemoOptions.map((o) => o.value);
   ['loading', 'noresults', 'credits', 'source-down', 'timeout', 'network',
     'invalid', 'partial', 'success', 'idle', 'bulk-limit',
-    'session-expired', 'export-success'].forEach((v) => {
+    'session-expired', 'export-success', 'no-connections'].forEach((v) => {
     assert.ok(vals.indexOf(v) >= 0, '缺少演练项 ' + v);
   });
   vals.forEach((v) => assert.ok(Core.PHASES[v], v + ' 不是合法 phase'));
@@ -336,6 +338,159 @@ t('18 类类型 / 每类 3 模块 / 三种成本类型齐备', () => {
     assert.deepEqual(kinds, ['dynamic', 'fixed', 'free']);
   });
   assert.ok(Data.modules.filter((m) => m.recommended).length >= 18);
+});
+
+// ===========================================================================
+// E4 / S4：证据包新增 UI 规格（数据形状 / 纯逻辑 / 合规硬边界）
+// ===========================================================================
+group('E4 · F-03 关联线索为空（独立状态 + 计数口径差异）');
+t('no-connections 有明确文案、口径差异说明与可操作出口', () => {
+  const p = Core.PHASES['no-connections'];
+  assert.ok(p && p.title.length > 4 && p.desc.length > 8);
+  assert.ok(p.desc.indexOf('口径') >= 0, '需说明是统计口径差异');
+  assert.ok(p.desc.indexOf('不是') >= 0, '需说明不是错误');
+  assert.ok(p.actions.length >= 1);
+  assert.ok(p.guidance.length >= 2);
+});
+t('buildResults(no-connections)：关联计数 0，详情区仍有相关行，显式标记口径差异', () => {
+  const r = Core.buildResults({ seeds: Data.resultSeeds, sources: Data.sources,
+    selectedSourceIds: allIds, scenario: 'no-connections', batchCount: 1 });
+  assert.ok(r.total > 0, '仍应有直接/补充命中行');
+  assert.equal(r.counts.connection, 0, '关联线索计数应为 0');
+  assert.ok(r.counts.found > 0 && r.counts.enriched > 0);
+  assert.ok(r.rows.some((x) => x.category === 'connection'), '详情区仍可列出关联条目');
+  assert.equal(r.counterMismatch, true);
+  assert.ok(r.counterMismatchNote.indexOf('口径') >= 0);
+});
+t('RESOLVE 可落到 no-connections，且 RETRY 可回到 loading', () => {
+  const loading = Core.reduceResult(Core.initialResult(), { type: 'RUN', payload: { gate: 'pass' } });
+  const s = Core.reduceResult(loading, { type: 'RESOLVE', payload: { outcome: 'no-connections' } });
+  assert.equal(s.phase, 'no-connections');
+  assert.equal(Core.reduceResult(s, { type: 'RETRY' }).phase, 'loading');
+});
+
+group('E4 · E.2/H-4 两套结果列集（按模块切换，不声称唯一列集）');
+t('columnSets 恰有两套且列头形状不同', () => {
+  assert.deepEqual(Object.keys(Data.columnSets).sort(), ['multi', 'single']);
+  const s = Data.columnSets.single.headers.map((h) => h.label);
+  const m = Data.columnSets.multi.headers.map((h) => h.label);
+  assert.notDeepEqual(s, m, '两套列集不应相同');
+  assert.ok(s.indexOf('站点') >= 0 && s.indexOf('档案链接') >= 0);
+  assert.ok(m.indexOf('命中平台') >= 0 && m.indexOf('数据源') >= 0);
+  [Data.columnSets.single, Data.columnSets.multi].forEach((set) => {
+    assert.ok(set.headers.length >= 4);
+    set.headers.forEach((h) => assert.ok(h.key && h.label, '列头需含 key/label'));
+  });
+});
+t('columnSetFor：单源模块 -> single，多源/浮动模块 -> multi', () => {
+  const mods = Data.modulesByType(Data.searchTypes[0].id);
+  assert.equal(Core.columnSetFor(mods[0]), 'single');
+  assert.equal(Core.columnSetFor(mods[1]), 'single');
+  assert.equal(Core.columnSetFor(mods[2]), 'multi');
+  assert.equal(Core.columnSetFor(null), 'single');
+});
+
+group('E4 · P01/P03 实体页签 / 表头排序 / F-09 逐行流入');
+t('filterByEntity：all 全量，其余按占位分类过滤', () => {
+  const r = Core.buildResults({ seeds: Data.resultSeeds, sources: Data.sources,
+    selectedSourceIds: allIds, scenario: 'success', batchCount: 1 });
+  assert.equal(Core.filterByEntity(r.rows, 'all').length, r.total);
+  ['email', 'phone', 'ip', 'domain', 'wallet', 'url'].forEach((tab) => {
+    const f = Core.filterByEntity(r.rows, tab);
+    assert.ok(f.length > 0, tab + ' 页签应有示例行');
+    assert.ok(f.every((x) => (x.entity || 'url') === tab));
+  });
+  assert.deepEqual(r.rows, r.rows, '过滤不得改动原数组');
+});
+t('sortRows：按置信度升降序、非法 key 原样副本、不可变', () => {
+  const r = Core.buildResults({ seeds: Data.resultSeeds, sources: Data.sources,
+    selectedSourceIds: allIds, scenario: 'success', batchCount: 1 });
+  const asc = Core.sortRows(r.rows, 'confidence', 'asc');
+  const desc = Core.sortRows(r.rows, 'confidence', 'desc');
+  for (let i = 1; i < asc.length; i++) { assert.ok(asc[i - 1].confidence <= asc[i].confidence); }
+  for (let i = 1; i < desc.length; i++) { assert.ok(desc[i - 1].confidence >= desc[i].confidence); }
+  const bad = Core.sortRows(r.rows, 'notAKey', 'asc');
+  assert.deepEqual(bad, r.rows);
+  assert.notStrictEqual(bad, r.rows);
+  assert.notStrictEqual(asc, r.rows);
+  assert.equal(Core.SORT_KEYS.indexOf('notAKey'), -1);
+});
+t('streamSlice：前 n 行且 n 被钳制到 [0, length]', () => {
+  const arr = [1, 2, 3, 4, 5];
+  assert.deepEqual(Core.streamSlice(arr, 0), []);
+  assert.deepEqual(Core.streamSlice(arr, 3), [1, 2, 3]);
+  assert.deepEqual(Core.streamSlice(arr, 99), arr);
+  assert.deepEqual(Core.streamSlice(arr, -5), []);
+  assert.notStrictEqual(Core.streamSlice(arr, 99), arr);
+});
+
+group('E4 · P07/P14/P05/E12/E04/G-03 新增 UI 规格数据形状');
+t('三种视图分段、默认普通视图；高级视图数据齐备', () => {
+  assert.equal(Data.views.length, 3);
+  assert.deepEqual(Data.views.map((v) => v.id), ['basic', 'advanced', 'agent']);
+  assert.ok(Data.caseEvents.length >= 3);
+  Data.caseEvents.forEach((e) => {
+    assert.deepEqual(Object.keys(e).sort(), ['at', 'event']);
+  });
+  assert.ok(Data.agentPromo && Data.agentPromo.title && Data.agentPromo.points.length >= 2);
+});
+t('7 个实体页签默认全部；结果双 tab / 三详情 tab / 弹窗双变体', () => {
+  assert.equal(Data.entityTabs.length, 7);
+  assert.equal(Data.entityTabs[0].id, 'all', '默认应为「全部」');
+  assert.deepEqual(Data.resultTabs.map((x) => x.label), ['结果', '书签']);
+  assert.equal(Data.detailTabs.length, 3);
+  assert.ok(Data.detailTabs.some((x) => x.label === '档案视图'));
+  assert.ok(Data.detailTabs.some((x) => x.label === '关系图'));
+  assert.equal(Data.modalVariants.length, 2);
+  assert.deepEqual(Data.modalVariants.map((x) => x.id), ['filter', 'sources']);
+});
+t('主题默认浅色且有自造持久化键；登录页头/页脚、重置页文案齐备', () => {
+  assert.equal(Data.theme.defaultTheme, 'light');
+  assert.ok(Data.theme.storageKey && Data.theme.storageKey.length > 4);
+  assert.ok(Data.signinHeader.length >= 2 && Data.signinFooter.length >= 4);
+  assert.ok(Data.resetCopy.title && Data.resetCopy.desc && Data.resetCopy.codeSent);
+});
+t('D.2 输入 label 随「模块」变化：每类 3 个模块给出 3 个不同 label', () => {
+  Data.searchTypes.forEach((ty) => {
+    const labels = Data.modulesByType(ty.id).map((m) => m.inputLabel);
+    assert.equal(labels.length, 3);
+    assert.equal(new Set(labels).size, 3, ty.id + ' 的模块 label 应互不相同');
+    labels.forEach((l) => assert.ok(l && l.length > 0));
+  });
+});
+
+group('E4 · 合规硬边界（站点 5 文件，逐条 grep 自检）');
+t('站点 5 文件不含原站品牌 / 模块名 / 数据源名 / 暖橙配色词', () => {
+  const banned = ['UserSearch', 'usersearch', 'S.A.R.G.E.', 'SargeBot', 'OneScan',
+    'HaveIBeenPwned', 'HudsonRock', 'IntelX', 'Gravatar', 'coral-orange',
+    'PIPL', 'EPIEOS', 'Username Search'];
+  ['index.html', 'styles.css', 'data.js', 'core.js', 'app.js'].forEach((f) => {
+    const txt = fs.readFileSync(path.join(siteDir, f), 'utf8');
+    banned.forEach((w) => {
+      assert.ok(txt.toLowerCase().indexOf(w.toLowerCase()) < 0,
+        f + ' 命中禁止词 ' + w);
+    });
+  });
+});
+t('index.html 不使用 ES module / fetch / CDN / 外部图片', () => {
+  const html = fs.readFileSync(path.join(siteDir, 'index.html'), 'utf8');
+  assert.ok(html.indexOf('type="module"') < 0, '不可用 ES module');
+  assert.ok(html.indexOf('fetch(') < 0, '不可 fetch');
+  assert.ok(!/<script[^>]+src=["']https?:/i.test(html), '不可引用外部脚本');
+  assert.ok(!/<link[^>]+href=["']https?:/i.test(html), '不可引用外部样式');
+  assert.ok(!/<img[^>]+src=/i.test(html), '不可引用外部图片');
+  assert.ok(html.indexOf('<script src="data.js"></script>') >= 0);
+  assert.ok(html.indexOf('<script src="core.js"></script>') >= 0);
+  assert.ok(html.indexOf('<script src="app.js"></script>') >= 0);
+});
+t('?state= 每个演练值都能被 FORCE 接受（14 个状态可复现）', () => {
+  Data.stateDemoOptions.forEach((o) => {
+    const s = Core.reduceResult(Core.initialResult(),
+      { type: 'FORCE', payload: { phase: o.value } });
+    assert.equal(s.phase, o.value, o.value + ' 不可复现');
+    assert.ok(Core.PHASES[o.value].actions.length >= 1);
+  });
+  assert.equal(Data.stateDemoOptions.length, 14);
 });
 
 // ===========================================================================
