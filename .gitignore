@@ -23,3 +23,7 @@ playwright-report/
 
 # Local-only recon artifacts (raw dumps are not deliverables)
 recon/raw/
+
+# Browser headless temp profiles created during screenshot verification
+site/tests/.edge-tmp/
+**/.edge-tmp/
